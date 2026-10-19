@@ -1,0 +1,28 @@
+{
+  "name": "home-bot",
+  "version": "1.1.5",
+  "description": "Telegram bot that switches a Midea water heater off during power outages, based on a Deye inverter. Runs on Cloudflare Workers.",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "author": "Andriy Vydysh",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test --test-reporter=spec \"test/*.test.mjs\"",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "check": "npm run lint && npm run format:check && npm test",
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.5",
+    "eslint": "^9.39.5",
+    "globals": "^15.15.0",
+    "prettier": "^3.9.10",
+    "wrangler": "^4.151.2"
+  }
+}

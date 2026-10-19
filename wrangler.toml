@@ -1,0 +1,29 @@
+# Налаштування для свого дому: заміни значення в <...> (інструкція — README.md або AGENTS.md).
+# Секрети сюди НЕ пишуться — їх додають у Cloudflare (див. README).
+name = "home-bot"                 # назва воркера; має збігатися з назвою в Cloudflare
+main = "src/index.js"
+compatibility_date = "2026-10-16"
+keep_vars = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "home-bot"
+database_id = "<ID бази D1>"      # Cloudflare → Storage & databases → D1 → твоя база
+
+# Перевірка кожні 2 хв. Альтернатива — зовнішній пінгер (README, розділ «Розклад»).
+[triggers]
+crons = ["*/2 * * * *"]
+
+# Необов'язково: запускати воркер ближче до хмар Midea/Deye в Європі
+# [placement]
+# region = "aws:eu-central-1"
+
+[observability]
+enabled = true
+
+# Пристрої. Спочатку можна лишити порожніми, розгорнути й відкрити /discover?key=<ACCESS_KEY>
+[vars]
+DEYE_SN = ""                      # серійний номер інвертора Deye
+MIDEA_DEVICE_ID = ""              # ідентифікатор бойлера Midea
+TZ = "Europe/Kyiv"
+# NOTIFY_NAME = "Асистент"     # підпис службових повідомлень /notify (необов'язково)
