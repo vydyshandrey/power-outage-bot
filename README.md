@@ -1,21 +1,29 @@
-# home-bot — дім, який сам реагує на відключення світла
+# power-outage-bot — бот, що керує домом під час відключень світла
 
 [![CI](https://github.com/vydyshandrey/power-outage-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/vydyshandrey/power-outage-bot/actions/workflows/ci.yml)
 
-Коли зникає світло, інвертор переходить на батарею. Електричний бойлер за кілька годин може її розрядити, якщо його вчасно не вимкнути. Стежити за цим вручну незручно: вимкнути, коли світло зникло, не забути увімкнути, коли повернулось, і так кілька разів на день.
+Світло зникло — бот вимикає бойлер, обігрівач та іншу техніку, що швидко розряджає батарею інвертора. Тоді заряду вистачає на світло, холодильник та інтернет. Світло повернулось — бот чекає 5 хвилин стабільної мережі, вмикає все назад і надсилає статус.
 
-**home-bot робить це сам і звітує в Telegram:**
+**Що вміє:**
 
-- 🔌 **Світло зникло.** Бот повідомляє, скільки світло було, яке зараз споживання й заряд батареї, і вимикає бойлер.
-- 💡 **Світло з'явилось.** Бот повідомляє, скільки світла не було. Коли мережа 5 хвилин стабільна, він вмикає бойлер назад, але лише якщо вимикав його сам.
-- 📊 **Статус на кнопці:** напруга, споживання, батарея, стан і температура бойлера.
-- 🏠 **Керування пристроями з телефона** та історія: хто, коли й що вмикав.
-- 👥 **Сім'я.** Новий користувач надсилає запит, адмін схвалює й обирає права: лише сповіщення, перегляд або керування.
-- 🛡 **Спокійно, коли щось ламається.** Якщо хмара виробника на хвилину збоїть, бот мовчки повторює. Якщо за 10 хвилин не вийшло, пише одне зрозуміле повідомлення: «вимкни вручну».
+- **Вимикає.** Коли світло зникає, вимикає пристрої, що «їдять» батарею.
+- **Вмикає.** Коли світло стабільно повернулось, вмикає їх назад.
+- **Повідомляє.** Пише в Telegram лише по ділу. Якщо знадобишся ти, скаже, що натиснути.
+- **Показує статус.** Одна кнопка: чи є світло, скільки в батареї, що ввімкнено.
+- **Дає керувати.** Вмикай і вимикай пристрої з телефона, де б ти не був. Історія показує, хто, коли й що вмикав.
+- **Твоє слово головне.** Вимкнув щось сам — бот не ввімкне без тебе.
+- **Кожному свої права.** Хтось лише бачить статус, хтось керує окремими пристроями.
 
-**Працює безкоштовно й без домашнього сервера.** Бот живе в хмарі Cloudflare на безкоштовному тарифі та спілкується з хмарами Deye й Midea так само, як їхні застосунки.
+**Без абонплати й без обладнання вдома.** Бот працює в хмарі Cloudflare на безкоштовному тарифі й спілкується з хмарами виробників так само, як їхні застосунки.
 
-**Що потрібно:** інвертор **Deye** з доступом через DeyeCloud і бойлер **Midea**, яким керують через застосунок SmartHome. Без бойлера бот працюватиме лише як сповіщення про світло.
+**Вже працює з:**
+
+| Що        | Моделі                                                  |
+| --------- | ------------------------------------------------------- |
+| Інвертори | Deye з доступом через DeyeCloud                         |
+| Пристрої  | бойлери Midea, якими керують через застосунок SmartHome |
+
+Список моделей оновлюється за потребою. Без керованих пристроїв бот працює як сповіщення про світло й статус.
 
 ---
 
@@ -76,6 +84,6 @@ npm run dev      # локальний запуск (wrangler dev)
 
 ---
 
-**English summary.** A free, serverless Telegram bot (Cloudflare Workers + D1). It watches a Deye inverter and switches a Midea water heater off when the grid goes down and back on after 5 minutes of stable power, but only if it was the one that switched it off. It has roles, per-device permissions, an event history, and silent retries with a single escalation message. Deploy it manually or ask an AI assistant to follow [AGENTS.md](AGENTS.md).
+**English summary.** A free, serverless Telegram bot (Cloudflare Workers + D1) for power outages. When the grid goes down it switches off appliances that drain the inverter battery; when power has been stable for 5 minutes it switches them back on and reports the status. It shows status on a button, lets you control devices from the phone, never overrides a manual switch-off, and has per-user, per-device permissions. Works today with Deye inverters (DeyeCloud) and Midea water heaters (SmartHome); more models are added as needed. Deploy it manually or ask an AI assistant to follow [AGENTS.md](AGENTS.md).
 
 Автор: Андрій Видиш. Ліцензія: [MIT](LICENSE).
