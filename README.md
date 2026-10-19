@@ -1,4 +1,4 @@
-# power-outage-bot — бот, що керує домом під час відключень світла
+# power-outage-bot — автоматичне керування технікою під час відключень світла
 
 [![CI](https://github.com/vydyshandrey/power-outage-bot/actions/workflows/ci.yml/badge.svg)](https://github.com/vydyshandrey/power-outage-bot/actions/workflows/ci.yml)
 
