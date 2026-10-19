@@ -11,6 +11,9 @@
 import { kvGet, kvSet, logEvent } from './db.js';
 import { encode, hash, hex, now, randHex, sleep } from './util.js';
 
+// Public identifiers of the MSmartHome mobile app (the same values are published in
+// open-source Midea integrations). They are not account credentials: the account's
+// email and password come only from Worker secrets.
 const GLOBAL_URL = 'https://mp-prod.appsmb.com/mas/v5/app/proxy?alias=';
 const APP_ID = '1010';
 const APP_KEY = 'ac21b9f9cbfe4ca5a88562ef25e2b768';
