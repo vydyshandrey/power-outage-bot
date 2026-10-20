@@ -38,9 +38,11 @@ DEYE_SN = ""                      # серійний номер інвертор
 # DESS_DEVADDR = ""
 # DESS_PLATFORM = "shinemonitor"  # лише для застосунку SmartClient for Solar
 # Для INVERTER = "valueclouds" (застосунок SmartValue):
-# VC_PN = ""                      # номер на наклейці Wi-Fi-модуля, 18 символів
-# VC_SN = ""                      # серійний номер інвертора
-# VC_DEVCODE і VC_DEVADDR підкаже /discover
+# Усе є в застосунку: пристрій → «Деталі пристрою».
+# VC_PN = ""                      # PN
+# VC_SN = ""                      # SN
+# VC_DEVCODE = ""                 # «Протокол зв'язку»
+# VC_DEVADDR = ""                 # «Адреса зв'язку»
 MIDEA_DEVICE_ID = ""              # ідентифікатор бойлера Midea
 TZ = "Europe/Kyiv"
 # NOTIFY_NAME = "Асистент"     # підпис службових повідомлень /notify (необов'язково)
