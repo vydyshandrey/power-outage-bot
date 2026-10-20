@@ -59,5 +59,5 @@ test('the update button: asks for the repository, gives the link, or starts the 
 test('members cannot start an update', async () => {
   const w = createWorld();
   const res = await w.press(MEMBER, 'up:go');
-  assert.ok(textsTo(res, 'answer').includes('Лише для власника бота'));
+  assert.ok(textsTo(res, 'answer').includes('Лише для адміна'));
 });

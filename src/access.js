@@ -7,33 +7,14 @@
  *
  * Callback data "u:…": l list · o:<uid> card · r:<uid> confirm removal · e:<uid> edit by person ·
  * k:<site.id|dev> edit by site/device · c:<key|uid> change a line · p:<page> page ·
- * q search · q0 clear search · s save · x cancel · i invitation link.
- *
- * Everything works inside the admin's current cabinet: its people, its sites, its devices.
+ * q search · q0 clear search · s save · x cancel.
  */
 
-import {
-  HOME,
-  LEVELS,
-  LEVEL_LABEL,
-  ROLES,
-  deviceById,
-  deviceSite,
-  siteCabinet,
-  siteKey,
-  siteTree,
-  sitesOf,
-} from './config.js';
+import { LEVELS, LEVEL_LABEL, ROLES, deviceById, deviceSite, siteKey, siteTree, sitesOf } from './config.js';
 import { clearPerm, db, kvGet, kvSet, setPerm } from './db.js';
-import { cabinetName, displayName } from './store.js';
-import { edit, send, tg } from './telegram.js';
-import { NL, esc, now, randHex } from './util.js';
-
-/** Invitation links stay valid this long. Seconds. */
-const INVITE_TTL = 7 * 86400;
-
-const cabSites = (env, cab) => sitesOf(env).filter((s) => siteCabinet(s) === cab);
-const cabTree = (env, cab) => siteTree(env).filter((n) => siteCabinet(n.site) === cab);
+import { displayName } from './store.js';
+import { edit, send } from './telegram.js';
+import { NL, esc } from './util.js';
 
 const PAGE = 8;
 const SHORT = { none: '🚫', view: '👁', control: '🎛' };
@@ -97,34 +78,17 @@ async function saveDraft(env, d) {
   }
 }
 
-/**
- * People of a cabinet, each with `role` = their role there. Requests waiting for approval
- * (when sign-up is closed) are shown in the first cabinet.
- */
-async function people(env, cab) {
-  const D = await db(env);
-  const members = (
-    await D.prepare(
-      "SELECT u.*, m.role AS role FROM users u JOIN members m ON m.chat_id=u.chat_id AND m.cabinet=? WHERE u.status='approved' ORDER BY m.rowid"
-    )
-      .bind(cab)
-      .all()
-  ).results;
-  if (cab !== HOME) return members;
-  const pending = (await D.prepare("SELECT * FROM users WHERE status='pending' ORDER BY created").all()).results;
-  return [...members, ...pending];
-}
-
-/** One person as a member of the cabinet, or null. */
-const personIn = async (env, cab, id) => (await people(env, cab)).find((u) => u.chat_id === Number(id)) || null;
+const people = async (env) =>
+  (await (await db(env)).prepare("SELECT * FROM users WHERE status IN ('approved','pending') ORDER BY created").all())
+    .results;
 
 /* ---------- screens ---------- */
 
 /** "Дім 🎛 · Майстерня 👁" — the sites a user sees. */
-function shortAccess(env, L, u, cab) {
+function shortAccess(env, L, u) {
   if (u.status === 'pending') return 'чекає схвалення';
   if (u.role === 'admin') return 'адмін, усе';
-  const parts = cabSites(env, cab)
+  const parts = sitesOf(env)
     .map((s) => [s, L.site(u.chat_id, siteKey(s))])
     .filter(([, l]) => l !== 'none')
     .map(([s, l]) => `${esc(s.name)} ${SHORT[l]}`);
@@ -132,20 +96,20 @@ function shortAccess(env, L, u, cab) {
 }
 
 /** "👥 Користувачі": one line per person, buttons two in a row. */
-export async function usersList(env, cab) {
-  const list = await people(env, cab);
+export async function usersList(env) {
+  const list = await people(env);
+  if (!list.length) return { text: 'Користувачів немає.', kb: [] };
   const L = levels(env, await allRows(env));
-  const lines = list.map((u) => `${roleIcon(u)} ${isolate(esc(displayName(u)))}: ${shortAccess(env, L, u, cab)}`);
+  const lines = list.map((u) => `${roleIcon(u)} ${isolate(esc(displayName(u)))}: ${shortAccess(env, L, u)}`);
   const kb = [];
   for (let i = 0; i < list.length; i += 2) {
     kb.push(
       list.slice(i, i + 2).map((u) => ({ text: `${roleIcon(u)} ${displayName(u)}`, callback_data: `u:o:${u.chat_id}` }))
     );
   }
-  kb.push([{ text: '➕ Запросити людину', callback_data: 'u:i' }]);
   return {
     text: [
-      `<b>👥 Користувачі · ${esc(cabinetName(env, cab))}</b> (${list.length})`,
+      `<b>👥 Користувачі</b> (${list.length})`,
       '👑 адмін · 👤 користувач · ⏳ чекає · 👁 бачить · 🎛 керує',
       '',
       ...lines,
@@ -156,11 +120,10 @@ export async function usersList(env, cab) {
 
 /** A person's card: who, role, access, and every action on them. */
 export async function userCard(env, me, u) {
-  const cab = me.cab;
   const L = levels(env, await allRows(env));
   const lines = [`${roleIcon(u)} ${userLabel(u)}`];
   if (u.status === 'pending') lines.push('Чекає схвалення.');
-  else lines.push(`Роль: ${ROLES[u.role] || ROLES.user}`, `Доступ: ${shortAccess(env, L, u, cab)}`);
+  else lines.push(`Роль: ${ROLES[u.role] || ROLES.user}`, `Доступ: ${shortAccess(env, L, u)}`);
   if (u.alias) lines.push(`У повідомленнях: ${isolate(esc(u.alias))}`);
 
   const id = u.chat_id;
@@ -205,7 +168,7 @@ async function byUserView(env, d) {
   const u = await (await db(env)).prepare('SELECT * FROM users WHERE chat_id=?').bind(d.uid).first();
   const L = levels(env, await allRows(env), d.ch);
   const kb = [];
-  for (const { site, key, devices } of cabTree(env, d.cab)) {
+  for (const { site, key, devices } of siteTree(env)) {
     kb.push([{ text: `⚡ ${site.name}: ${LEVEL_LABEL[L.site(d.uid, key)]}`, callback_data: `u:c:${key}` }]);
     for (const dev of devices) {
       const x = L.device(d.uid, dev);
@@ -237,7 +200,7 @@ async function byKeyView(env, d) {
   const isSite = d.key.startsWith('site.');
   const site = isSite ? sitesOf(env).find((s) => siteKey(s) === d.key) : deviceSite(env, d.key);
   const dev = isSite ? null : deviceById(env, d.key);
-  const all = (await people(env, d.cab)).filter((u) => u.status === 'approved');
+  const all = (await people(env)).filter((u) => u.status === 'approved');
   const admins = all.filter((u) => u.role === 'admin');
   const q = (d.q || '').toLowerCase();
   const users = all
@@ -282,32 +245,11 @@ async function byKeyView(env, d) {
 
 const draftView = (env, d) => (d.mode === 'user' ? byUserView(env, d) : byKeyView(env, d));
 
-/* ---------- invitations ---------- */
-
-/** The bot's @username, for links. */
-async function botUsername(env) {
-  const cached = await kvGet(env, 'bot_username');
-  if (cached) return cached;
-  const r = await tg(env, 'getMe', {});
-  const name = r?.result?.username || 'bot';
-  await kvSet(env, 'bot_username', name);
-  return name;
-}
-
-/** Uses an invitation once. @returns {Promise<string | null>} the cabinet, or null if the code is not valid */
-export async function takeInvite(env, code) {
-  const D = await db(env);
-  const inv = await D.prepare('SELECT * FROM invites WHERE code=?').bind(code).first();
-  if (!inv) return null;
-  await D.prepare('DELETE FROM invites WHERE code=?').bind(code).run();
-  return now() - inv.created <= INVITE_TTL ? inv.cabinet : null;
-}
-
 /* ---------- entry points ---------- */
 
 /** Opens the access editor for a person (also right after approving them). */
-export async function openUserEditor(env, adminChat, uid, cab) {
-  const d = { mode: 'user', uid, cab, ch: {} };
+export async function openUserEditor(env, adminChat, uid) {
+  const d = { mode: 'user', uid, ch: {} };
   await setDraft(env, adminChat, d);
   return byUserView(env, d);
 }
@@ -333,23 +275,22 @@ export async function onAccessCallback(env, cq, me, parts, done) {
     await edit(env, cq, v.text, v.kb);
     return done();
   };
-  const cab = me.cab;
-  const getU = (id) => personIn(env, cab, id);
+  const getU = (id) => db(env).then((D) => D.prepare('SELECT * FROM users WHERE chat_id=?').bind(Number(id)).first());
 
   switch (act) {
     case 'l':
       await dropDraft(env, chat);
-      return show(await usersList(env, cab));
+      return show(await usersList(env));
     case 'o': {
       const u = await getU(a);
-      if (!u) return show(await usersList(env, cab));
+      if (!u) return show(await usersList(env));
       return show(await userCard(env, me, u));
     }
     case 'r': {
       const u = await getU(a);
-      if (!u) return show(await usersList(env, cab));
+      if (!u) return show(await usersList(env));
       return show({
-        text: `Прибрати ${userLabel(u)} з кабінету «${esc(cabinetName(env, cab))}»? Людина втратить доступ до його об'єктів.`,
+        text: `Прибрати ${userLabel(u)}? Людина втратить доступ, кнопки в неї зникнуть.`,
         kb: [
           [
             { text: '🗑 Так, прибрати', callback_data: `r:${u.chat_id}` },
@@ -361,52 +302,27 @@ export async function onAccessCallback(env, cq, me, parts, done) {
     case 'e': {
       const u = await getU(a);
       if (!u || u.role === 'admin' || u.status !== 'approved') return done('Адмін бачить і керує всім');
-      return show(await openUserEditor(env, chat, u.chat_id, cab));
-    }
-    case 'i': {
-      const code = randHex(6);
-      await (
-        await db(env)
-      )
-        .prepare('INSERT INTO invites (code,cabinet,by,created) VALUES (?,?,?,?)')
-        .bind(code, cab, chat, now())
-        .run();
-      const link = `https://t.me/${await botUsername(env)}?start=inv_${code}`;
-      await send(
-        env,
-        chat,
-        [
-          `<b>➕ Запрошення в «${esc(cabinetName(env, cab))}»</b>`,
-          "Перешли це посилання людині. Вона натисне «Старт» і одразу потрапить у кабінет: побачить перший об'єкт. Решту доступу налаштуєш у її картці.",
-          'Посилання одноразове, діє 7 днів.',
-          '',
-          link,
-        ].join(NL)
-      );
-      return done();
+      return show(await openUserEditor(env, chat, u.chat_id));
     }
     case 'k': {
       const key = parts.slice(1).join(':');
       const known = key.startsWith('site.')
-        ? cabSites(env, cab).some((s) => siteKey(s) === key)
-        : Boolean(deviceById(env, key)) && siteCabinet(deviceSite(env, key)) === cab;
+        ? sitesOf(env).some((s) => siteKey(s) === key)
+        : Boolean(deviceById(env, key));
       if (!known) return done('Не знайдено');
-      const d = { mode: 'key', key, cab, ch: {}, q: '', page: 0 };
+      const d = { mode: 'key', key, ch: {}, q: '', page: 0 };
       await setDraft(env, chat, d);
       return show(await byKeyView(env, d));
     }
   }
 
   const d = await getDraft(env, chat);
-  if (!d || d.cab !== cab) return done('Екран застарів, відкрий його ще раз');
+  if (!d) return done('Екран застарів, відкрий його ще раз');
   d.waitQ = false;
   switch (act) {
     case 'c': {
       const uid = d.mode === 'user' ? d.uid : Number(a);
       const key = d.mode === 'user' ? parts.slice(1).join(':') : d.key;
-      const inCab = cabTree(env, cab).some((n) => n.key === key || n.devices.includes(key));
-      const member = await personIn(env, cab, uid);
-      if (!inCab || !member || member.role === 'admin' || member.status !== 'approved') return done('Не можна');
       const L = levels(env, await allRows(env), d.ch);
       const r = nextValue(env, L, uid, key);
       if (r.error) return done(r.error);

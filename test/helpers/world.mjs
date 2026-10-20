@@ -162,7 +162,6 @@ export function createWorld({ users = true } = {}) {
     vcLogins: 0,
     sent: [], // Telegram messages: { chat, text, markup, photo? }
     charts: [], // chart configurations sent to the renderer
-    deleted: [], // ids of messages the bot deleted
     controls: [], // Midea power commands: 'on' | 'off'
     pending: [],
     db: D1.sql,
@@ -239,7 +238,6 @@ export function createWorld({ users = true } = {}) {
         });
       }
       if (method === 'answerCallbackQuery') w.sent.push({ chat: 'answer', text: body.text });
-      if (method === 'deleteMessage') w.deleted.push(body.message_id);
       return json({ ok: true, result: { username: 'test_bot' } });
     }
     // Midea
@@ -380,23 +378,8 @@ export function createWorld({ users = true } = {}) {
   };
 
   /** Simulates a text message from a private chat. */
-  let messageId = 100;
   w.say = (chat, text, name = `User${chat}`, entities) =>
-    post({
-      message: {
-        message_id: ++messageId,
-        chat: { id: chat, type: 'private' },
-        from: { id: chat, first_name: name },
-        text,
-        entities,
-      },
-    });
-
-  /** Open sign-up: anyone may create a cabinet. */
-  w.openSignup = () => {
-    D1.sql.exec("INSERT INTO kv VALUES ('cfg.signup','open')");
-    return w;
-  };
+    post({ message: { chat: { id: chat, type: 'private' }, from: { first_name: name }, text, entities } });
 
   /** Simulates an inline-button press. */
   w.press = (chat, data) =>

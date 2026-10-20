@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '2.0.0';
+export const VERSION = '1.10.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -84,7 +84,6 @@ export const controllable = (dev) => Boolean(CATEGORIES[DEVICE_TYPES[dev.type]?.
  * @property {Record<string, string>} params inverter identifiers in that cloud (sn, pn …)
  * @property {boolean} primary the first site keeps the historical storage keys
  * @property {string | null} [source] id of the inverter device that reports the site's grid
- * @property {string} [cabinet] the cabinet the site belongs to
  */
 
 /**
@@ -162,15 +161,6 @@ export const deviceById = (env, id) => devicesOf(env).find((d) => d.id === id) |
 
 /** Permission key of a site. */
 export const siteKey = (site) => `site.${site.id}`;
-
-/**
- * The first cabinet: the deployment owner's. It also uses the credentials kept in Cloudflare
- * secrets; every other cabinet uses only the credentials its admins entered in the bot.
- */
-export const HOME = 'c1';
-
-/** Cabinet of a site (sites from before cabinets belong to the first). */
-export const siteCabinet = (site) => site?.cabinet || HOME;
 
 /**
  * Sites with the controllable devices that belong to them: the structure of the access screen.

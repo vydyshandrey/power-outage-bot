@@ -1,10 +1,6 @@
 /**
- * "⚙️ Налаштування": everything a cabinet's admin sets up in the bot — objects, devices, cloud
- * passwords (entered here, stored encrypted), the cabinet's name. The bot's operator also
- * sets what is common to everyone: message texts, time zone, updates, sign-up.
- *
- * Every screen works inside the admin's current cabinet (env.CAB): only its sites and
- * devices are shown and can be changed.
+ * "⚙️ Налаштування": everything the owner sets up in the bot, without touching code or
+ * Cloudflare (only passwords stay in Cloudflare secrets). Admins only.
  *
  * Callback data starts with "s:". When the bot waits for typed text (a name, a message
  * text, an inverter number) the expected input is kept in kv "await:<chat id>".
@@ -12,17 +8,14 @@
 
 import { userCard } from './access.js';
 import { batteryThreshold } from './automation.js';
-import { CATEGORIES, DEVICE_TYPES, HOME, devicesOf as allDevices, siteCabinet, sitesOf as allSites } from './config.js';
+import { CATEGORIES, DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
 import { db, kvGet, kvSet, usersBy } from './db.js';
 import { listDevices, missingDeviceSecrets } from './devices.js';
-import { CLOUDS, listInverters, missingSecrets, probeInverter } from './inverter.js';
-import { credEnv, deleteSecrets, secretNamesOf, setSecret } from './secrets.js';
+import { CLOUDS, listInverters, missingSecrets, probeInverter, secretNames } from './inverter.js';
 import { TEMPLATES, VARS, fill, templateText, unknownVars } from './messages.js';
 import {
   addDevice,
   addSite,
-  cabinetName,
-  renameCabinet,
   deleteDevice,
   deleteSite,
   setAlias,
@@ -31,95 +24,11 @@ import {
   updateDevice,
   updateSite,
 } from './store.js';
-import { RELEASES_BUTTON, edit, mainKeyboard, send, tg } from './telegram.js';
+import { RELEASES_BUTTON, edit, mainKeyboard, send } from './telegram.js';
 import { NL, esc } from './util.js';
 import { updateOffer } from './updates.js';
 
 const back = (data) => [{ text: '⬅️ Назад', callback_data: data }];
-
-/** Sites and devices of the current cabinet (env.CAB). */
-const sitesOf = (env) => allSites(env).filter((s) => siteCabinet(s) === env.CAB);
-const devicesOf = (env) => {
-  const ids = new Set(sitesOf(env).map((s) => s.id));
-  return allDevices(env).filter((d) => ids.has(d.site));
-};
-
-/* ---------- cloud passwords, typed in the bot ---------- */
-
-/** What to ask for each credential; the order in which to ask. */
-const CRED_PROMPTS = {
-  DEYE_EMAIL: 'Email, яким ти входиш у застосунок Deye Cloud.',
-  DEYE_PASSWORD: 'Пароль від Deye Cloud.',
-  DEYE_APP_ID:
-    'Ключ доступу до даних Deye. Зайди на developer.deyecloud.com <b>тим самим email</b>, створи застосунок (Application, назва будь-яка) і надішли його <b>AppId</b>.',
-  DEYE_APP_SECRET: 'Тепер <b>AppSecret</b> того ж застосунку.',
-  DESS_USER: 'Логін від SmartESS / WatchPower, як у застосунку.',
-  DESS_PASSWORD: 'Пароль від SmartESS / WatchPower.',
-  VC_USER: 'Логін від SmartValue (email чи телефон), як у застосунку.',
-  VC_PASSWORD: 'Пароль від SmartValue.',
-  MIDEA_EMAIL:
-    'Email акаунта SmartHome (Midea). Краще окремий акаунт, з яким основний поділився бойлером: тоді застосунок на телефоні не скаржитиметься на вхід з іншого місця.',
-  MIDEA_PASSWORD: 'Пароль від цього акаунта SmartHome.',
-};
-const baseName = (n) => n.replace(/_\d+$/, '');
-const credOrder = (n) => Object.keys(CRED_PROMPTS).indexOf(baseName(n));
-
-/** Credential groups: which cloud and account a stored name belongs to. */
-const CRED_GROUPS = { DEYE: 'Deye', DESS: 'SmartESS / WatchPower', VC: 'SmartValue', MIDEA: 'Midea SmartHome' };
-const groupOf = (n) => {
-  const [g] = n.split('_');
-  const acc = Number(n.match(/_(\d+)$/)?.[1]) || 1;
-  return { g, acc, prefix: `${g}_`, label: `${CRED_GROUPS[g] || g}${acc > 1 ? `, акаунт ${acc}` : ''}` };
-};
-
-/** Asks for the next missing credential, or continues where the flow came from. */
-async function askCredential(env, chat, state) {
-  const name = state.names[state.i];
-  if (!name) return afterCredentials(env, chat, state);
-  const acc = groupOf(name).acc;
-  return ask(
-    env,
-    chat,
-    state,
-    [
-      `🔑 ${CRED_PROMPTS[baseName(name)] || name}${acc > 1 ? ` (акаунт ${acc})` : ''}`,
-      '',
-      '🔒 Я одразу видалю твоє повідомлення з чату, а значення збережу зашифрованим.',
-    ].join(NL)
-  );
-}
-
-async function afterCredentials(env, chat, state) {
-  const { then } = state;
-  if (then?.kind === 'inv') return pickInverter(env, chat, { ...then.state }, null);
-  if (then?.kind === 'dev') return devicePick(env, chat, then.type, null);
-  await clearAwait(env, chat);
-  const v = await credList(env);
-  return send(env, chat, `✅ Збережено.${NL}${NL}${v.text}`, { reply_markup: { inline_keyboard: v.kb } });
-}
-
-/** "🔑 Паролі хмар": what the cabinet entered, by cloud and account. */
-async function credList(env) {
-  const names = await secretNamesOf(env, env.CAB);
-  const groups = {};
-  for (const n of names) {
-    const g = groupOf(n);
-    groups[`${g.g}:${g.acc}`] = g;
-  }
-  const kb = Object.entries(groups).map(([k, g]) => [
-    { text: `🔄 ${g.label}`, callback_data: `s:kr:${k}` },
-    { text: '🗑', callback_data: `s:kx:${k}` },
-  ]);
-  kb.push(back('s:m'));
-  const lines = [
-    '<b>🔑 Паролі хмар</b>',
-    Object.keys(groups).length
-      ? 'Збережено зашифрованими. 🔄 — ввести заново, 🗑 — видалити.'
-      : 'Ще нічого не збережено. Бот сам попросить пароль, коли додаватимеш інвертор чи пристрій.',
-  ];
-  if (env.CAB === HOME) lines.push('Паролі з секретів Cloudflare теж діють; введені тут мають перевагу.');
-  return { text: lines.join(NL), kb };
-}
 
 /* ---------- waiting for typed input ---------- */
 
@@ -155,17 +64,12 @@ export function entitiesToHtml(text, entities = []) {
 
 /* ---------- screens ---------- */
 
-function mainMenu(env, me) {
-  const kb = [
-    [{ text: "🏠 Об'єкти", callback_data: 's:sl' }],
-    [{ text: '🔌 Пристрої', callback_data: 's:dl' }],
-    [{ text: '🔑 Паролі хмар', callback_data: 's:kl' }],
-    [{ text: '✏️ Назва кабінету', callback_data: 's:cn' }],
-  ];
-  if (me.cabs.filter((c) => c.role === 'admin').length > 1)
-    kb.push([{ text: '🔀 Інший кабінет', callback_data: 's:cw' }]);
-  if (me.op) {
-    kb.push(
+function mainMenu(env) {
+  return {
+    text: '<b>⚙️ Налаштування</b>',
+    kb: [
+      [{ text: "🏠 Об'єкти", callback_data: 's:sl' }],
+      [{ text: '🔌 Пристрої', callback_data: 's:dl' }],
       [{ text: '✉️ Повідомлення', callback_data: 's:tl' }],
       [
         { text: '🕒 Часовий пояс', callback_data: 's:tz' },
@@ -178,26 +82,7 @@ function mainMenu(env, me) {
           callback_data: 's:rv',
         },
       ],
-      [
-        {
-          text:
-            env.CFG?.settings?.signup === 'open'
-              ? '🚪 Реєстрація: відкрита (будь-хто створює кабінет)'
-              : '🚪 Реєстрація: за запитом до тебе',
-          callback_data: 's:su',
-        },
-      ]
-    );
-  }
-  const cabs = (env.CFG?.cabinets || []).length;
-  return {
-    text: [
-      `<b>⚙️ Налаштування · ${esc(cabinetName(env, env.CAB))}</b>`,
-      me.op ? `Нижче — спільне для всього бота (бачиш лише ти). Кабінетів у боті: ${cabs}.` : '',
-    ]
-      .filter(Boolean)
-      .join(NL),
-    kb,
+    ],
   };
 }
 
@@ -286,11 +171,14 @@ function cloudMenu(siteId) {
 function accountMenu(cloud) {
   return {
     text: [
-      `Який акаунт ${CLOUDS[cloud].app}?`,
-      "Зазвичай — основний. Інший обирай, якщо цей інвертор в окремому акаунті (наприклад, батьків): бот запам'ятає для нього окремий логін і пароль.",
+      'Який акаунт?',
+      'Основний — секрети з простими назвами. Якщо інвертори в різних акаунтах (наприклад, свій і батьків), для другого додай секрети з «_2» у кінці.',
     ].join(NL),
     kb: [1, 2, 3].map((n) => [
-      { text: `🔑 ${n === 1 ? 'Основний акаунт' : `Акаунт ${n}`}`, callback_data: `s:sk:${n}` },
+      {
+        text: `🔑 ${n === 1 ? 'Основний' : `Акаунт ${n}`}: ${secretNames(cloud, n).join(', ')}`,
+        callback_data: `s:sk:${n}`,
+      },
     ]),
   };
 }
@@ -404,43 +292,30 @@ function repoMenu(env) {
 
 /* ---------- adding an inverter ---------- */
 
-/** Shows a view on the button's message, or as a new message after typed input. */
-const out = (env, chat, cq) => (text, kb) =>
-  cq ? edit(env, cq, text, kb) : send(env, chat, text, { reply_markup: { inline_keyboard: kb } });
-
-/** After the cloud and account are chosen: ask for missing passwords, then list inverters or ask for numbers. */
+/** After the cloud and account are chosen: check secrets, then list inverters or ask for numbers. */
 async function pickInverter(env, chat, state, cq) {
-  const show = out(env, chat, cq);
   const backTo = `s:so:${state.siteId}`;
-  const cenv = await credEnv(env, env.CAB);
-  const missing = missingSecrets(cenv, state.cloud, state.account).sort((a, b) => credOrder(a) - credOrder(b));
+  const missing = missingSecrets(env, state.cloud, state.account);
   if (missing.length) {
-    if (cq)
-      await show(`🔑 Щоб бот зайшов у ${CLOUDS[state.cloud].app}, потрібні логін і пароль. Питатиму по черзі.`, []);
-    return askCredential(env, chat, {
-      kind: 'cred',
-      names: missing,
-      i: 0,
-      then: { kind: 'inv', state: { ...state, kind: 'inv_new' } },
-    });
+    const text = [
+      '🔑 Потрібні паролі від хмари. Додай у Cloudflare (воркер → Settings → Variables and Secrets → Add → Secret):',
+      ...missing.map((n) => `• <code>${n}</code>`),
+      '',
+      'Після цього натисни «Перевірити».',
+    ].join(NL);
+    return edit(env, cq, text, [[{ text: '🔄 Перевірити', callback_data: `s:sk:${state.account}` }], back(backTo)]);
   }
   let found;
   try {
-    found = await listInverters(cenv, state.cloud, state.account, state.extra || {});
+    found = await listInverters(env, state.cloud, state.account, state.extra || {});
   } catch (e) {
-    return show(`Не вдалося увійти в хмару: ${esc(e.message)}`, [
+    return edit(env, cq, `Не вдалося увійти в хмару: ${esc(e.message)}`, [
       [{ text: '🔄 Спробувати ще', callback_data: `s:sk:${state.account}` }],
-      [
-        {
-          text: '🔑 Ввести пароль заново',
-          callback_data: `s:kr:${state.cloud === 'deye' ? 'DEYE' : state.cloud === 'dess' ? 'DESS' : 'VC'}:${state.account}`,
-        },
-      ],
       back(backTo),
     ]);
   }
   if (found === null) {
-    await show('✅ Вхід у SmartValue працює.', []);
+    await edit(env, cq, '✅ Вхід у SmartValue працює.', []);
     return ask(
       env,
       chat,
@@ -454,43 +329,13 @@ async function pickInverter(env, chat, state, cq) {
       .map((d) => d.params.sn)
   );
   found = found.filter((f) => !taken.has(f.params.sn));
-  if (!found.length) return show('Нових інверторів у цьому акаунті не знайдено.', [back(backTo)]);
+  if (!found.length) return edit(env, cq, 'Нових інверторів у цьому акаунті не знайдено.', [back(backTo)]);
   await setAwait(env, chat, { ...state, kind: 'pick', found });
-  return show(
+  return edit(
+    env,
+    cq,
     'Обери інвертор:',
     found.slice(0, 20).map((f, i) => [{ text: f.label.slice(0, 60), callback_data: `s:sp:${i}` }])
-  );
-}
-
-/** Lists the vendor account's devices of a type, after asking for missing passwords. */
-async function devicePick(env, chat, type, cq) {
-  const show = out(env, chat, cq);
-  const cenv = await credEnv(env, env.CAB);
-  const missing = missingDeviceSecrets(cenv, type).sort((a, b) => credOrder(a) - credOrder(b));
-  if (missing.length) {
-    if (cq) await show('🔑 Щоб бот бачив пристрій, потрібен акаунт його застосунку. Питатиму по черзі.', []);
-    return askCredential(env, chat, { kind: 'cred', names: missing, i: 0, then: { kind: 'dev', type } });
-  }
-  let found;
-  try {
-    found = await listDevices(cenv, type);
-  } catch (e) {
-    return show(`Не вдалося увійти в хмару: ${esc(e.message)}`, [
-      [{ text: '🔄 Ще раз', callback_data: `s:dt:${type}` }],
-      [{ text: '🔑 Ввести пароль заново', callback_data: 's:kr:MIDEA:1' }],
-      back('s:dl'),
-    ]);
-  }
-  const taken = new Set(allDevices(env).map((d) => d.params.device_id));
-  found = found.filter((f) => !taken.has(f.params.device_id));
-  if (!found.length) {
-    await clearAwait(env, chat);
-    return show('Нових пристроїв в акаунті не знайдено.', [back('s:dl')]);
-  }
-  await setAwait(env, chat, { kind: 'dev_pick', type, found });
-  return show(
-    'Обери пристрій:',
-    found.slice(0, 20).map((f, i) => [{ text: f.label.slice(0, 60), callback_data: `s:dp:${i}` }])
   );
 }
 
@@ -528,7 +373,6 @@ export async function onSettingsText(env, msg, user) {
   const chat = msg.chat.id;
   const state = await getAwait(env, chat);
   if (!state || user.role !== 'admin') return false;
-  env.CAB = user.cab;
   const text = (msg.text || '').trim();
   if (text === '/cancel') {
     await clearAwait(env, chat);
@@ -538,22 +382,8 @@ export async function onSettingsText(env, msg, user) {
   if (!text) return true;
 
   switch (state.kind) {
-    case 'cred': {
-      // The value must not stay in the chat history.
-      await tg(env, 'deleteMessage', { chat_id: chat, message_id: msg.message_id });
-      await setSecret(env, env.CAB, state.names[state.i], text);
-      await askCredential(env, chat, { ...state, i: state.i + 1 });
-      return true;
-    }
-    case 'cab_name': {
-      await renameCabinet(env, env.CAB, text.slice(0, 40));
-      await clearAwait(env, chat);
-      const m = mainMenu(env, user);
-      await send(env, chat, m.text, { reply_markup: { inline_keyboard: m.kb } });
-      return true;
-    }
     case 'site_new_name': {
-      const id = await addSite(env, { name: text.slice(0, 40), cabinet: env.CAB });
+      const id = await addSite(env, { name: text.slice(0, 40) });
       await setAwait(env, chat, { kind: 'inv_new', siteId: id });
       const m = cloudMenu(id);
       await send(env, chat, `✅ Об'єкт «${esc(text.slice(0, 40))}» додано. Тепер його інвертор.${NL}${NL}${m.text}`, {
@@ -578,8 +408,7 @@ export async function onSettingsText(env, msg, user) {
       }
       try {
         const clean = Object.fromEntries(Object.entries(params).filter(([, v]) => v));
-        const cenv = await credEnv(env, env.CAB);
-        const { params: found, sample } = await probeInverter(cenv, state.cloud, state.account, clean);
+        const { params: found, sample } = await probeInverter(env, state.cloud, state.account, clean);
         await send(env, chat, `✅ Інвертор відповідає: мережа ${sample.grid ? 'є' : 'немає'}, батарея ${sample.soc}%.`);
         await saveInverter(env, chat, state, found);
       } catch (e) {
@@ -626,15 +455,7 @@ export async function onSettingsText(env, msg, user) {
     case 'alias': {
       await setAlias(env, state.id, text === '-' ? null : text.slice(0, 40));
       await clearAwait(env, chat);
-      const u = await (
-        await db(env)
-      )
-        .prepare(
-          'SELECT u.*, m.role AS role FROM users u JOIN members m ON m.chat_id=u.chat_id AND m.cabinet=? WHERE u.chat_id=?'
-        )
-        .bind(env.CAB, state.id)
-        .first();
-      if (!u) return true;
+      const u = await (await db(env)).prepare('SELECT * FROM users WHERE chat_id=?').bind(state.id).first();
       const m = await userCard(env, user, u);
       await send(env, chat, m.text, { reply_markup: { inline_keyboard: m.kb } });
       return true;
@@ -674,25 +495,11 @@ export async function onSettingsText(env, msg, user) {
 
 /* ---------- buttons ---------- */
 
-const SITE_ACTS = new Set(['so', 'sn', 'ia', 'si', 'sS', 'sd', 'sD', 'bt', 'bT']);
-const DEVICE_ACTS = new Set(['do', 'dn', 'di', 'ds', 'dS', 'dA', 'dd', 'dD']);
-const OPERATOR_ACTS = new Set(['tl', 'to', 'te', 'ts', 'tx', 'tr', 'tz', 'tZ', 'tY', 'rp', 'rE', 'rv', 'up', 'su']);
-
 /** @param {string[]} parts callback data split by ":" without the leading "s" */
 export async function onSettingsCallback(env, cq, me, parts, done) {
   if (me.role !== 'admin') return done('Лише для адміна');
-  env.CAB = me.cab;
   const chat = me.chat_id;
   const [act, a, b] = parts;
-  // Only the current cabinet's sites and devices; only the operator changes what is common to all.
-  if (SITE_ACTS.has(act) && !sitesOf(env).some((s) => s.id === a)) return done("Об'єкт не знайдено");
-  if (DEVICE_ACTS.has(act) && !devicesOf(env).some((d) => d.id === a)) return done('Пристрій не знайдено');
-  if (
-    (act === 'dS' && !sitesOf(env).some((s) => s.id === b)) ||
-    (act === 'dP' && !sitesOf(env).some((s) => s.id === a))
-  )
-    return done("Об'єкт не знайдено");
-  if (OPERATOR_ACTS.has(act) && !me.op) return done('Лише для власника бота');
   const show = async (view) => {
     await edit(env, cq, view.text, view.kb);
     return done();
@@ -702,7 +509,7 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
   switch (act) {
     case 'm':
       await clearAwait(env, chat);
-      return show(mainMenu(env, me));
+      return show(mainMenu(env));
 
     /* sites */
     case 'sl':
@@ -796,9 +603,37 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
         text: "На якому об'єкті цей інвертор?",
         kb: [...sitesOf(env).map((s) => [{ text: `🏠 ${s.name}`, callback_data: `s:ia:${s.id}` }]), back('s:da')],
       });
-    case 'dt':
-      await devicePick(env, chat, a, cq);
-      return done();
+    case 'dt': {
+      const missing = missingDeviceSecrets(env, a);
+      if (missing.length) {
+        return show({
+          text: [
+            '🔑 Потрібен акаунт Midea для бота. Додай у Cloudflare секрети:',
+            ...missing.map((n) => `• <code>${n}</code>`),
+            '',
+            'Це має бути окремий акаунт SmartHome, з яким основний поділився бойлером.',
+          ].join(NL),
+          kb: [[{ text: '🔄 Перевірити', callback_data: `s:dt:${a}` }], back('s:dl')],
+        });
+      }
+      let found;
+      try {
+        found = await listDevices(env, a);
+      } catch (e) {
+        return show({
+          text: `Не вдалося увійти в хмару: ${esc(e.message)}`,
+          kb: [[{ text: '🔄 Ще раз', callback_data: `s:dt:${a}` }], back('s:dl')],
+        });
+      }
+      const taken = new Set(devicesOf(env).map((d) => d.params.device_id));
+      found = found.filter((f) => !taken.has(f.params.device_id));
+      if (!found.length) return show({ text: 'Нових пристроїв в акаунті не знайдено.', kb: [back('s:dl')] });
+      await setAwait(env, chat, { kind: 'dev_pick', type: a, found });
+      return show({
+        text: 'Обери пристрій:',
+        kb: found.slice(0, 20).map((f, i) => [{ text: f.label.slice(0, 60), callback_data: `s:dp:${i}` }]),
+      });
+    }
     case 'dp': {
       const f = state.found?.[Number(a)];
       if (!f) return show(devicesList(env));
@@ -893,16 +728,6 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
 
     /* people, time zone, repository, updates */
     case 'uo':
-      if (
-        !me.cabs.length ||
-        !(await (
-          await db(env)
-        )
-          .prepare('SELECT 1 FROM members WHERE chat_id=? AND cabinet=?')
-          .bind(Number(a), env.CAB)
-          .first())
-      )
-        return done('Людина не в цьому кабінеті');
       await ask(
         env,
         chat,
@@ -936,59 +761,8 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
         }
       }
       await clearAwait(env, chat);
-      return show(mainMenu(env, me));
+      return show(mainMenu(env));
     }
-    case 'kl':
-      await clearAwait(env, chat);
-      return show(await credList(env));
-    case 'kr': {
-      // Re-enter all credentials of one cloud account.
-      const acc = Number(b) || 1;
-      const names = Object.keys(CRED_PROMPTS)
-        .filter((n) => n.startsWith(`${a}_`))
-        .map((n) => (acc > 1 ? `${n}_${acc}` : n));
-      if (!names.length) return done('Невідома хмара');
-      await edit(env, cq, `🔑 ${CRED_GROUPS[a] || a}: введи заново. Питатиму по черзі.`, []);
-      // Came here from a failed login while adding an inverter: carry on with it afterwards.
-      const resume =
-        state.then?.kind === 'inv'
-          ? state.then
-          : state.cloud && state.siteId
-            ? { kind: 'inv', state: { ...state, kind: 'inv_new' } }
-            : null;
-      await askCredential(env, chat, { kind: 'cred', names, i: 0, then: resume });
-      return done();
-    }
-    case 'kx':
-      await deleteSecrets(env, env.CAB, `${a}_`);
-      return show(await credList(env));
-    case 'cn':
-      await ask(env, chat, { kind: 'cab_name' }, 'Нова назва кабінету (бачать його люди):');
-      return done();
-    case 'cw':
-      return show({
-        text: 'Який кабінет налаштовувати?',
-        kb: [
-          ...me.cabs
-            .filter((c) => c.role === 'admin')
-            .map((c) => [
-              {
-                text: `${c.cabinet === env.CAB ? '✅ ' : ''}${cabinetName(env, c.cabinet)}`,
-                callback_data: `s:cW:${c.cabinet}`,
-              },
-            ]),
-          back('s:m'),
-        ],
-      });
-    case 'cW': {
-      if (!me.cabs.some((c) => c.cabinet === a && c.role === 'admin')) return done('Немає доступу');
-      await kvSet(env, `cab:${chat}`, a);
-      env.CAB = a;
-      return show(mainMenu(env, { ...me, cab: a }));
-    }
-    case 'su':
-      await setSetting(env, 'signup', env.CFG?.settings?.signup === 'open' ? 'closed' : 'open');
-      return show(mainMenu(env, me));
     case 'up': {
       let offer;
       try {
@@ -1004,9 +778,8 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
 }
 
 /** "⚙️ Налаштування" from the keyboard. */
-export async function openSettings(env, chat, me) {
-  env.CAB = me.cab;
+export async function openSettings(env, chat) {
   await clearAwait(env, chat);
-  const m = mainMenu(env, me);
+  const m = mainMenu(env);
   return send(env, chat, m.text, { reply_markup: { inline_keyboard: m.kb } });
 }

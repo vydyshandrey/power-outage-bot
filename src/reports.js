@@ -10,7 +10,7 @@ import { NL, esc, fmtDur, fmtHM, fmtTime, now } from './util.js';
 /** "📊 Статус": per visible site grid, consumption and battery, then one line per visible device. */
 export async function statusText(env, user) {
   const sites = await viewableSites(env, user);
-  const titled = sites.length > 1;
+  const titled = sitesOf(env).length > 1;
   const devices = (await viewableDevices(env, user)).map((id) => deviceById(env, id));
   const lines = [];
   for (const site of sites) {
@@ -123,10 +123,9 @@ export async function deviceHistory(env, id) {
 
 /** Outages over the last `days` at every site the user sees. */
 export async function outagesReport(env, user, days = 7) {
-  const sites = await viewableSites(env, user);
-  const titled = sites.length > 1;
+  const titled = sitesOf(env).length > 1;
   const parts = [];
-  for (const site of sites) parts.push(await siteOutages(env, site, days, titled));
+  for (const site of await viewableSites(env, user)) parts.push(await siteOutages(env, site, days, titled));
   return parts.join(NL + NL) || "Немає доступних об'єктів.";
 }
 
@@ -172,7 +171,7 @@ export async function devicesMenu(env, user) {
   const switchable = (await viewableDevices(env, user)).map((id) => deviceById(env, id));
   const devs = sitesOf(env).flatMap((s) => [...inverters, ...switchable].filter((d) => d.site === s.id));
   if (!devs.length) return { text: 'Доступних пристроїв немає. Попроси адміністратора надати доступ.', kb: [] };
-  const titled = sites.size > 1;
+  const titled = sitesOf(env).length > 1;
   const kb = devs.map((d) => [
     {
       text: `${d.icon} ${d.name}${titled ? ` · ${sitesOf(env).find((s) => s.id === d.site)?.name}` : ''}`,

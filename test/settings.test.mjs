@@ -61,7 +61,7 @@ test('upgrade: what was in wrangler.toml becomes settings, inverters become devi
       params: { cloud: 'valueclouds', account: 1, pn: 'I300', sn: 'DEV1', devcode: '6422', devaddr: '4' },
     },
   ]);
-  assert.equal(w.kv('schema_v'), '8');
+  assert.equal(w.kv('schema_v'), '7');
   const dev = w.db.prepare("SELECT * FROM devices WHERE type='midea_boiler'").get();
   assert.equal(dev.id, 'boiler');
   assert.equal(JSON.parse(dev.params).device_id, '100000000000001');
@@ -106,19 +106,12 @@ test('adding a SmartESS site in the bot: name → app → account → pick the i
   assert.ok(buttons(apps).some((b) => b.callback_data === 's:sc:dess'));
   await w.press(ADMIN, 's:sc:dess');
 
-  // No password yet: the bot asks for the login and the password, and deletes what was typed.
+  // No password yet: the bot says exactly which secrets to add.
   const need = await w.press(ADMIN, 's:sk:1');
-  assert.ok(textsTo(need, ADMIN).some((t) => t.includes('Логін від SmartESS')));
-  await w.say(ADMIN, DESS_USER);
-  const list = await w.say(ADMIN, DESS_PASSWORD);
-  assert.equal(w.deleted.length, 2, 'both messages are deleted');
-  const stored = w.db.prepare('SELECT name, value FROM secrets ORDER BY name').all();
-  assert.deepEqual(
-    stored.map((r) => r.name),
-    ['DESS_PASSWORD', 'DESS_USER']
-  );
-  assert.ok(!stored.some((r) => r.value.includes(DESS_PASSWORD) || r.value.includes('smartess')), 'encrypted');
+  assert.match(need[0].text, /DESS_USER[\s\S]*DESS_PASSWORD/);
+  Object.assign(w.env, { DESS_USER, DESS_PASSWORD });
 
+  const list = await w.press(ADMIN, 's:sk:1');
   assert.match(buttons(list)[0].text, /PV18 · 96342210100001/);
   const saved = await w.press(ADMIN, 's:sp:0');
   assert.ok(textsTo(saved, ADMIN).some((t) => t.startsWith('✅ Збережено') && t.includes('Квартира мами')));
