@@ -15,13 +15,13 @@ test('access request → admin approves as a user → sees the home, access scre
   const w = createWorld();
   const req = await w.say(42, '/start', 'Olha');
   const toAdmin = req.find((m) => m.chat === ADMIN);
-  assert.match(toAdmin.text, /^🙋 Запит на доступ: Olha/);
+  assert.match(toAdmin.text, /^🙋 Запит на доступ: \u2068Olha\u2069/);
   assert.ok(toAdmin.markup.inline_keyboard.flat().some((b) => b.callback_data === 'a:42:user'));
 
   const approved = await w.press(ADMIN, 'a:42:user');
   assert.ok(textsTo(approved, 42).includes('✅ Доступ надано: Користувач.'));
   const screen = approved.find((m) => m.chat === 'edit');
-  assert.match(screen.text, /🔐 Доступ: Olha/);
+  assert.match(screen.text, /🔐 Доступ: \u2068Olha\u2069/);
   assert.deepEqual(
     screen.markup.inline_keyboard.map(([b]) => b.text),
     ['⚡ Дім: 👁 бачить', '      🚿 Бойлер: як Дім']

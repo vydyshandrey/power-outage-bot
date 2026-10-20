@@ -21,8 +21,11 @@ import { deviceCard, deviceHistory, devicesMenu, outagesReport, statusText } fro
 import { broadcastDevice, edit, mainKeyboard, send, tg } from './telegram.js';
 import { NL, esc, now } from './util.js';
 
+/** Keeps a name written right-to-left (Arabic, Hebrew) from scrambling the rest of the line. */
+const isolate = (text) => `\u2068${text}\u2069`;
+
 const userLabel = (u) =>
-  `${esc(displayName(u))}${u.alias && u.name ? ` (${esc(u.name)})` : ''}${u.username ? ` @${esc(u.username)}` : ''} (<code>${u.chat_id}</code>)`;
+  `${isolate(esc(displayName(u)))}${u.alias && u.name ? ` (${isolate(esc(u.name))})` : ''}${u.username ? ` @${esc(u.username)}` : ''} (<code>${u.chat_id}</code>)`;
 
 const roleButtons = (uid) => [
   [
