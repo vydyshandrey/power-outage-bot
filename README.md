@@ -14,6 +14,7 @@
 - **Твоє слово головне.** Вимкнув щось сам — бот не ввімкне без тебе.
 - **Кожному свої права.** Хтось лише бачить статус, хтось керує окремими пристроями.
 - **Кілька об'єктів.** Дім, майстерня, дача — в одному боті, кожен зі своїм інвертором. Адмін вирішує, хто який об'єкт бачить.
+- **Усе налаштовується в Telegram.** Об'єкти, пристрої, назви, тексти повідомлень. Нові версії — кнопкою.
 
 **Без абонплати й без обладнання вдома.** Бот працює в хмарі Cloudflare на безкоштовному тарифі й спілкується з хмарами виробників так само, як їхні застосунки.
 
@@ -38,45 +39,52 @@
 
 ## Як встановити
 
-### Варіант 1. З ШІ-асистентом (найпростіше)
+Близько 20 хвилин, без програмування. Покроково: [docs/install-guide.md](docs/install-guide.md).
 
-Відкрий Claude, ChatGPT чи іншого асистента й встав цей текст:
+1. Створи бота в Telegram (@BotFather).
+2. Натисни кнопку — Cloudflare скопіює проєкт і створить базу, спитає токен бота й ключ адміна:
+
+   [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/vydyshandrey/power-outage-bot)
+
+3. Напиши боту `/start <ключ>` і налаштуй усе в **⚙️ Налаштування**: об'єкти, інвертори, бойлери, назви, тексти повідомлень. Бот сам підкаже, які паролі від хмар додати в Cloudflare.
+
+Нові версії приходять у бот повідомленням з кнопкою **⬆️ Оновити**; налаштування й дані зберігаються.
+
+**З ШІ-асистентом.** Відкрий Claude, ChatGPT чи іншого асистента й встав цей текст:
 
 > Допоможи мені розгорнути проєкт https://github.com/vydyshandrey/power-outage-bot для мого дому. Спершу прочитай у ньому файл AGENTS.md і дій строго за ним. Я не програміст: пояснюй простими словами й кажи, що саме мені натиснути. Паролі й токени я вводитиму сам, а не в чат.
-
-Асистент проведе тебе кроками й перевірить результат. Якщо він має доступ до браузера або терміналу (Claude з браузером, Claude Code, ChatGPT у режимі агента), більшість роботи зробить сам. Тобі лишиться зареєструватися в сервісах, ввести паролі й натиснути «дозволити».
-
-### Варіант 2. Самостійно
-
-Покрокова інструкція — у файлі [AGENTS.md](AGENTS.md). Вона однакова для людини й для ШІ. Займає близько години, більша частина якої йде на реєстрації.
 
 ---
 
 ## Як влаштовано
 
 ```
-Інвертор Deye ──► хмара DeyeCloud ──┐
-                                     ├──► home-bot (Cloudflare, кожні 2 хв) ──► Telegram
-Бойлер Midea ◄── хмара Midea ◄──────┘                │
-                                                     └──► база подій і користувачів (D1)
+Інвертори (Deye, SmartESS, SmartValue) ──► їхні хмари ──┐
+                                                        ├──► бот (Cloudflare, кожні 2 хв) ──► Telegram
+Пристрої (бойлери Midea) ◄── хмара Midea ◄──────────────┘          │
+                                                                   └──► база D1: налаштування, люди, історія
 ```
 
 ### Структура коду
 
-| Файл                                               | Відповідає за                                                                |
-| -------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `src/index.js`                                     | вхідна точка: маршрути HTTP, вебхук Telegram, розклад                        |
-| `src/automation.js`                                | перевірка кожні 2 хв: стан мережі, вимкнення й увімкнення бойлера, ескалації |
-| `src/bot.js`                                       | повідомлення й кнопки в Telegram, доступ до об'єктів і пристроїв             |
-| `src/reports.js`                                   | статус, картка пристрою, історія, звіт про відключення                       |
-| `src/inverter.js`                                  | джерело даних інвертора для кожного об'єкта (`INVERTER` або `SITES`)         |
-| `src/deye.js`, `src/dess.js`, `src/valueclouds.js` | клієнти хмар Deye, DESS Monitor і ValueClouds (SmartValue)                   |
-| `src/midea.js`                                     | клієнт хмари Midea                                                           |
-| `src/db.js`                                        | сховище D1: стан, користувачі, права, журнал подій                           |
-| `src/config.js`                                    | пороги й параметри в одному місці                                            |
-| `test/`                                            | 46 сценаріїв на імітації хмар і Telegram, без мережі                         |
+| Файл                                               | Відповідає за                                                                  |
+| -------------------------------------------------- | ------------------------------------------------------------------------------ |
+| `src/index.js`                                     | вхідна точка: маршрути HTTP, вебхук Telegram, розклад                          |
+| `src/automation.js`                                | перевірка кожні 2 хв: стан мережі, вимкнення й увімкнення пристроїв, ескалації |
+| `src/bot.js`                                       | повідомлення й кнопки в Telegram, доступ до об'єктів і пристроїв               |
+| `src/settings.js`                                  | ⚙️ Налаштування в боті: об'єкти, пристрої, тексти, імена, оновлення            |
+| `src/messages.js`                                  | тексти сповіщень зі змінними; стандартні й змінені власником                   |
+| `src/store.js`                                     | налаштування в базі: читання й зміна                                           |
+| `src/reports.js`                                   | статус, картка пристрою, історія, звіт про відключення                         |
+| `src/inverter.js`                                  | хмари інверторів, акаунти й секрети до них                                     |
+| `src/deye.js`, `src/dess.js`, `src/valueclouds.js` | клієнти хмар Deye, DESS Monitor і ValueClouds (SmartValue)                     |
+| `src/devices.js`, `src/midea.js`                   | драйвери пристроїв і клієнт хмари Midea                                        |
+| `src/updates.js`, `scripts/apply-update.mjs`       | перевірка нових версій і оновлення копії кнопкою                               |
+| `src/db.js`                                        | сховище D1, права, журнал, міграції                                            |
+| `src/config.js`                                    | пороги й параметри в одному місці                                              |
+| `test/`                                            | 64 сценарії на імітації хмар, GitHub і Telegram, без мережі                    |
 
-Налаштування дому зберігаються в `wrangler.toml` (тип і номер інвертора, бойлер, часовий пояс). Паролі й токени — лише в секретах Cloudflare, у коді їх немає.
+Налаштування дому зберігаються в базі й змінюються в боті. Паролі й токени — лише в секретах Cloudflare, у коді їх немає. У `wrangler.toml` — тільки технічне: назва воркера, база, розклад.
 
 ### Для розробки
 
@@ -96,6 +104,6 @@ npm run dev      # локальний запуск (wrangler dev)
 
 ---
 
-**English summary.** A free, serverless Telegram bot (Cloudflare Workers + D1) for power outages. When the grid goes down it switches off appliances that drain the inverter battery; when power has been stable for 5 minutes it switches them back on and reports the status. It shows status on a button, lets you control devices from the phone, never overrides a manual switch-off, and has per-user, per-device permissions. Works today with Deye inverters (DeyeCloud), inverters on the DESS Monitor / ShineMonitor cloud (SmartESS, WatchPower and rebranded apps: MUST, Anenji, PowMr, Axpert), inverters in the SmartValue app (ValueClouds) and Midea water heaters (SmartHome); more models are added as needed. Deploy it manually or ask an AI assistant to follow [AGENTS.md](AGENTS.md).
+**English summary.** A free, serverless Telegram bot (Cloudflare Workers + D1) for power outages. When the grid goes down it switches off appliances that drain the inverter battery; when power has been stable for 5 minutes it switches them back on and reports the status. It shows status on a button, lets you control devices from the phone, never overrides a manual switch-off, has per-site and per-device permissions, and is set up entirely in Telegram, including message texts; updates come as a button. Works today with Deye inverters (DeyeCloud), inverters on the DESS Monitor / ShineMonitor cloud (SmartESS, WatchPower and rebranded apps: MUST, Anenji, PowMr, Axpert), inverters in the SmartValue app (ValueClouds) and Midea water heaters (SmartHome); more models are added as needed. Deploy with the Deploy to Cloudflare button or ask an AI assistant to follow [AGENTS.md](AGENTS.md).
 
 Автор: Андрій Видиш. Ліцензія: [MIT](LICENSE).

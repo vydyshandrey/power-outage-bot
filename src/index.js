@@ -6,7 +6,7 @@
  *   POST /notify?k=NOTIFY_KEY      service message to admins, e.g. from an assistant or a script
  *   GET  /tick?t=TICK_KEY          run the check (for an external scheduler)
  *   GET  /setup?key=ACCESS_KEY     register the webhook and bot commands
- *   GET  /discover?key=ACCESS_KEY  list devices visible to the inverter and Midea accounts
+ *   GET  /discover?key=ACCESS_KEY  diagnostics: what the configured accounts see
  *   GET  /tick?key=ACCESS_KEY      run the check manually and show the state
  * The cron trigger (wrangler.toml) runs the same check as /tick.
  */
@@ -17,7 +17,8 @@ import { onCallback, onMessage } from './bot.js';
 import { kvGet } from './db.js';
 import { discover } from './discover.js';
 import { broadcast, tg } from './telegram.js';
-import { NL, esc, hash, setTimeZone } from './util.js';
+import { loadConfig } from './store.js';
+import { NL, esc, hash } from './util.js';
 
 const forbidden = () => new Response('forbidden', { status: 403 });
 
@@ -62,22 +63,24 @@ async function handleSetup(env, url) {
       { command: 'status', description: 'Світло, батарея, пристрої' },
       { command: 'devices', description: 'Пристрої і керування' },
       { command: 'users', description: 'Користувачі (адмін)' },
+      { command: 'settings', description: 'Налаштування (адмін)' },
     ],
   });
   const me = await tg(env, 'getMe', {});
   return Response.json({ version: VERSION, webhook, commands: commands.ok, bot: me.result?.username });
 }
 
-/** Per-invocation environment: deployment settings plus request diagnostics. */
-function prepare(env, colo = '') {
-  setTimeZone(env.TZ);
-  return { ...env, COLO: colo };
+/** Per-invocation environment: secrets, the configuration from the database, request diagnostics. */
+async function prepare(env, colo = '') {
+  const e = { ...env, COLO: colo };
+  await loadConfig(e);
+  return e;
 }
 
 export default {
   /** @param {Request} req @param {import('./config.js').Env} rawEnv @param {ExecutionContext} ctx */
   async fetch(req, rawEnv, ctx) {
-    const env = prepare(rawEnv, req.cf?.colo);
+    const env = await prepare(rawEnv, req.cf?.colo);
     const url = new URL(req.url);
 
     if (url.pathname === '/tg' && req.method === 'POST') return handleWebhook(req, env, ctx);
@@ -107,6 +110,6 @@ export default {
 
   /** @param {ScheduledController} _event @param {import('./config.js').Env} rawEnv @param {ExecutionContext} ctx */
   async scheduled(_event, rawEnv, ctx) {
-    ctx.waitUntil(tick(prepare(rawEnv)));
+    ctx.waitUntil(prepare(rawEnv).then(tick));
   },
 };

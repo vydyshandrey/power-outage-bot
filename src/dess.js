@@ -54,31 +54,42 @@ export const actionString = (action, params = {}) =>
     .map(([k, v]) => `&${k}=${quotePlus(v)}`)
     .join('');
 
-const platformOf = (env) => {
-  const p = DESS_PLATFORMS[env.DESS_PLATFORM || 'dessmonitor'];
-  if (!p) throw new DessError(`DESS_PLATFORM має бути dessmonitor або shinemonitor, а не «${env.DESS_PLATFORM}»`);
+/**
+ * @typedef {object} DessConn one SmartESS / SmartClient account
+ * @property {import('./config.js').Env} env
+ * @property {string} user
+ * @property {string} password
+ * @property {string} [platform] dessmonitor (default) or shinemonitor
+ * @property {string} [companyKey]
+ * @property {string} cacheKey storage key of the cached session
+ */
+
+const platformOf = (c) => {
+  const p = DESS_PLATFORMS[c.platform || 'dessmonitor'];
+  if (!p) throw new DessError(`Платформа має бути dessmonitor або shinemonitor, а не «${c.platform}»`);
   return p;
 };
 
-/** @param {import('./config.js').Env} env */
-async function login(env) {
-  const p = platformOf(env);
+/** @param {DessConn} c */
+async function login(c) {
+  const { env } = c;
+  const p = platformOf(c);
   const salt = String(Date.now());
   const act = actionString(p.auth, {
-    usr: env.DESS_USER,
-    'company-key': env.DESS_COMPANY_KEY || DEFAULT_COMPANY_KEY,
+    usr: c.user,
+    'company-key': c.companyKey || DEFAULT_COMPANY_KEY,
     source: p.source,
     _app_client_: 'web',
     _app_id_: 'power-outage-bot',
     _app_version_: VERSION,
   });
-  const sign = await sha1(salt + (await sha1(env.DESS_PASSWORD)) + act);
+  const sign = await sha1(salt + (await sha1(c.password)) + act);
   const j = await getJson(`${p.base}?sign=${sign}&salt=${salt}${act}`);
   if (failed(j)) throw new DessError(`DESS вхід: ${j.desc || j.err}`, j.err);
   const { token, secret, expire } = j.dat || {};
   if (!token || !secret || !(expire > 0)) throw new DessError('DESS вхід: сервер не повернув токен');
   const session = { token, secret, exp: now() + expire - TOKEN_MARGIN_SEC };
-  await kvSet(env, 'dess_token', JSON.stringify(session));
+  await kvSet(env, c.cacheKey, JSON.stringify(session));
   return session;
 }
 
@@ -92,12 +103,12 @@ async function getJson(url) {
   }
 }
 
-async function session(env, force) {
+async function session(c, force) {
   if (!force) {
-    const cached = JSON.parse((await kvGet(env, 'dess_token')) || 'null');
+    const cached = JSON.parse((await kvGet(c.env, c.cacheKey)) || 'null');
     if (cached && cached.exp > now()) return cached;
   }
-  return login(env);
+  return login(c);
 }
 
 /**
@@ -105,10 +116,10 @@ async function session(env, force) {
  * because an expired or revoked token looks like any other error.
  * @returns {Promise<any>} the `dat` field
  */
-export async function dessCall(env, action, params = {}) {
-  const p = platformOf(env);
+export async function dessCall(c, action, params = {}) {
+  const p = platformOf(c);
   for (const force of [false, true]) {
-    const s = await session(env, force);
+    const s = await session(c, force);
     const salt = String(Date.now());
     const act = actionString(action, params);
     const sign = await sha1(salt + s.secret + s.token + act);
@@ -166,11 +177,11 @@ export function parseDessPoints(points) {
   };
 }
 
-const deviceParams = (env) => {
-  for (const k of ['DESS_PN', 'DESS_SN', 'DESS_DEVCODE', 'DESS_DEVADDR']) {
-    if (!env[k]) throw new DessError(`${k} не задано: відкрий /discover?key=<ACCESS_KEY>`);
+const deviceParams = (params) => {
+  for (const k of ['pn', 'sn', 'devcode', 'devaddr']) {
+    if (!params[k]) throw new DessError(`Не вказано ${k} інвертора`);
   }
-  return { pn: env.DESS_PN, devcode: env.DESS_DEVCODE, devaddr: env.DESS_DEVADDR, sn: env.DESS_SN };
+  return { pn: params.pn, devcode: params.devcode, devaddr: params.devaddr, sn: params.sn };
 };
 
 /**
@@ -178,41 +189,41 @@ const deviceParams = (env) => {
  *
  * The platform's "Timestamp" is in an unspecified time zone, so it is used only to
  * notice that the data changed: `ts` is when this bot first saw the current snapshot.
+ * @param {DessConn} c
+ * @param {Record<string, string>} params pn, sn, devcode, devaddr
  * @returns {Promise<import('./deye.js').Reading>}
  */
-export async function dessLatest(env) {
-  const points = await dessCall(env, 'queryDeviceLastData', { ...deviceParams(env), i18n: 'en' });
+export async function dessLatest(c, params) {
+  const { env } = c;
+  const points = await dessCall(c, 'queryDeviceLastData', { ...deviceParams(params), i18n: 'en' });
   if (!Array.isArray(points) || !points.length) throw new DessError('DESS: інвертор не повернув даних');
   const { stamp, ...reading } = parseDessPoints(points);
 
   let ts = now();
   if (stamp !== null) {
-    const seen = JSON.parse((await kvGet(env, 'dess_stamp')) || '{}');
+    const key = `dess_stamp:${params.sn}`;
+    const seen = JSON.parse((await kvGet(env, key)) || '{}');
     if (seen.v === String(stamp)) ts = seen.ts;
-    else await kvSet(env, 'dess_stamp', JSON.stringify({ v: String(stamp), ts }));
+    else await kvSet(env, key, JSON.stringify({ v: String(stamp), ts }));
   }
   return { ts, ...reading };
 }
 
-/** Plants → collectors (dongles) → devices, with the values /discover should suggest. */
-export async function dessDevices(env) {
-  const plants = (await dessCall(env, 'queryPlants', { pagesize: 50 }))?.plant || [];
+/** Plants → collectors (dongles) → devices visible to the account. @param {DessConn} c */
+export async function dessDevices(c) {
+  const plants = (await dessCall(c, 'queryPlants', { pagesize: 50 }))?.plant || [];
   const out = [];
   for (const plant of plants) {
-    const collectors = (await dessCall(env, 'webQueryCollectorsEs', { pid: plant.pid, page: 0, pagesize: 50 }))
+    const collectors = (await dessCall(c, 'webQueryCollectorsEs', { pid: plant.pid, page: 0, pagesize: 50 }))
       ?.collector;
-    for (const c of collectors || []) {
-      const devs = (await dessCall(env, 'queryCollectorDevices', { pn: c.pn }))?.dev || [];
-      out.push({
-        plant: plant.pname,
-        devices: devs.map((d) => ({
-          DESS_PN: c.pn,
-          DESS_SN: d.sn,
-          DESS_DEVCODE: String(d.devcode),
-          DESS_DEVADDR: String(d.devaddr),
-          alias: d.devalias || '',
-        })),
-      });
+    for (const col of collectors || []) {
+      const devs = (await dessCall(c, 'queryCollectorDevices', { pn: col.pn }))?.dev || [];
+      for (const d of devs) {
+        out.push({
+          label: [plant.pname, d.devalias, d.sn].filter(Boolean).join(' · '),
+          params: { pn: col.pn, sn: d.sn, devcode: String(d.devcode), devaddr: String(d.devaddr) },
+        });
+      }
     }
   }
   return out;

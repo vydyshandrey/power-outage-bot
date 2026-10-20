@@ -156,6 +156,8 @@ export function createWorld({ users = true } = {}) {
     dessFails: 0, // next N DESS data calls answer a platform error
     dessLogins: 0,
     vcFails: 0,
+    upstream: null, // { version, changelog } of the public project
+    dispatched: [], // GitHub workflow starts
     vcLogins: 0,
     sent: [], // Telegram messages: { chat, text, markup }
     controls: [], // Midea power commands: 'on' | 'off'
@@ -208,6 +210,9 @@ export function createWorld({ users = true } = {}) {
     }
     if (url.includes('api.telegram.org')) {
       const method = url.split('/').pop();
+      if (method === 'sendMessage' && body.parse_mode === 'HTML' && /<(?!\/?(b|i|u|s|code)>)/.test(body.text)) {
+        return json({ ok: false, error_code: 400, description: "Bad Request: can't parse entities" });
+      }
       if (method === 'sendMessage' || method === 'editMessageText') {
         w.sent.push({
           chat: method === 'editMessageText' ? 'edit' : body.chat_id,
@@ -242,6 +247,16 @@ export function createWorld({ users = true } = {}) {
       w.boiler.power = body.command.control.power;
       w.controls.push(w.boiler.power);
       return json({ code: 0, data: {} });
+    }
+    // The public project, for the update check
+    if (url.startsWith('https://raw.githubusercontent.com/')) {
+      if (!w.upstream) return json({}, 404);
+      if (url.endsWith('/package.json')) return json({ version: w.upstream.version });
+      if (url.endsWith('/CHANGELOG.md')) return { ok: true, status: 200, text: async () => w.upstream.changelog };
+    }
+    if (url.startsWith('https://api.github.com/repos/')) {
+      w.dispatched.push({ url, auth: init.headers?.authorization });
+      return { ok: true, status: 204, json: async () => ({}), text: async () => '' };
     }
     throw new Error(`unexpected fetch: ${url}`);
   };
@@ -346,8 +361,8 @@ export function createWorld({ users = true } = {}) {
   };
 
   /** Simulates a text message from a private chat. */
-  w.say = (chat, text, name = `User${chat}`) =>
-    post({ message: { chat: { id: chat, type: 'private' }, from: { first_name: name }, text } });
+  w.say = (chat, text, name = `User${chat}`, entities) =>
+    post({ message: { chat: { id: chat, type: 'private' }, from: { first_name: name }, text, entities } });
 
   /** Simulates an inline-button press. */
   w.press = (chat, data) =>

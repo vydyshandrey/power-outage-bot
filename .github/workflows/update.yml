@@ -1,0 +1,45 @@
+# Оновлення: забирає нову версію з github.com/vydyshandrey/power-outage-bot у твою копію.
+# Запускається кнопкою «⬆️ Оновити» в боті або тут: Actions → Оновлення → Run workflow.
+# Твої налаштування й дані в базі не змінюються. Якщо тести нової версії не пройдуть,
+# нічого не зміниться.
+name: Оновлення
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency: update
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Нова версія
+        run: |
+          git clone --depth 1 https://github.com/vydyshandrey/power-outage-bot.git "$RUNNER_TEMP/upstream"
+          node "$RUNNER_TEMP/upstream/scripts/apply-update.mjs" "$RUNNER_TEMP/upstream" .
+
+      - name: Перевірка
+        run: |
+          npm ci
+          npm test
+
+      - name: Зберегти
+        run: |
+          if git diff --quiet && [ -z "$(git status --porcelain)" ]; then
+            echo "Уже встановлено останню версію." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          git config user.name "power-outage-bot"
+          git config user.email "power-outage-bot@users.noreply.github.com"
+          git add -A
+          git commit -m "Оновлення до v$(node -p "require('./package.json').version")"
+          git push

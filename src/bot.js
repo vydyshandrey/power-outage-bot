@@ -10,14 +10,19 @@
  * a:<uid>:<role> approve · r:<uid> reject or revoke.
  */
 
-import { DEVICES, LEVELS, LEVEL_LABEL, ROLES, deviceSite, siteKey, siteTree } from './config.js';
+import { LEVELS, LEVEL_LABEL, ROLES, deviceById, deviceSite, siteKey, siteTree } from './config.js';
 import { clearPerm, db, deviceLimit, getPerm, getUser, kvSet, resetPerms, setPerm, usersBy } from './db.js';
-import { boilerPower } from './midea.js';
+import { DK, setDevicePower } from './devices.js';
+import { render } from './messages.js';
+import { onSettingsCallback, onSettingsText, openSettings } from './settings.js';
+import { displayName } from './store.js';
+import { startUpdate } from './updates.js';
 import { deviceCard, deviceHistory, devicesMenu, outagesReport, statusText } from './reports.js';
 import { broadcastDevice, edit, mainKeyboard, send, tg } from './telegram.js';
 import { NL, esc, now } from './util.js';
 
-const userLabel = (u) => `${esc(u.name || '')}${u.username ? ` @${esc(u.username)}` : ''} (<code>${u.chat_id}</code>)`;
+const userLabel = (u) =>
+  `${esc(displayName(u))}${u.alias && u.name ? ` (${esc(u.name)})` : ''}${u.username ? ` @${esc(u.username)}` : ''} (<code>${u.chat_id}</code>)`;
 
 const roleButtons = (uid) => [
   [
@@ -47,7 +52,7 @@ async function permsView(env, target) {
     for (const dev of devices) {
       const limit = await deviceLimit(env, target, dev);
       const label = limit ? LEVEL_LABEL[await getPerm(env, target, dev)] : `як ${site.name}`;
-      const { icon, name } = DEVICES[dev];
+      const { icon, name } = deviceById(env, dev);
       kb.push([{ text: `      ${icon} ${name}: ${label}`, callback_data: `pc:${target.chat_id}:${dev}` }]);
     }
   }
@@ -164,15 +169,18 @@ export async function onMessage(env, msg) {
     return send(env, id, 'Керування бойлером переїхало в «🏠 Пристрої».', { reply_markup: mainKeyboard(user.role) });
   }
   if ((text === '/users' || text === '👥 Користувачі') && user.role === 'admin') return listUsers(env, id);
+  if ((text === '/settings' || text === '⚙️ Налаштування') && user.role === 'admin') return openSettings(env, id);
+  if (await onSettingsText(env, msg, user)) return;
 
-  const menu = `Меню внизу: 📊 Статус, 🏠 Пристрої${user.role === 'admin' ? ', 👥 Користувачі' : ''}.`;
+  const menu = `Меню внизу: 📊 Статус, 🏠 Пристрої${user.role === 'admin' ? ', 👥 Користувачі, ⚙️ Налаштування' : ''}.`;
   return send(env, id, menu, { reply_markup: mainKeyboard(user.role) });
 }
 
 /* ---------- callbacks ---------- */
 
 async function handleDevice(env, cq, me, act, dev, arg, done) {
-  if (!DEVICES[dev]) return done('Невідомий пристрій');
+  const device = deviceById(env, dev);
+  if (!device) return done('Невідомий пристрій');
   const perm = await getPerm(env, me, dev);
   if (perm === 'none') return done('Немає доступу до пристрою');
 
@@ -184,13 +192,14 @@ async function handleDevice(env, cq, me, act, dev, arg, done) {
   if (act === 'dc') {
     if (perm !== 'control') return done('Лише перегляд');
     const on = arg === 'on';
-    const who = me.name || me.username || String(me.chat_id);
+    const who = displayName(me);
     try {
-      await boilerPower(env, on, who);
+      await setDevicePower(env, device, on, who);
       // A manual action cancels pending automation in either direction.
-      await kvSet(env, 'boiler_auto_off', '0');
-      await kvSet(env, 'want_off', '0');
-      await broadcastDevice(env, dev, `${on ? '🔥 Бойлер увімкнено' : '⛔ Бойлер вимкнено'}: ${esc(who)}.`);
+      await kvSet(env, DK(device, 'boiler_auto_off'), '0');
+      await kvSet(env, DK(device, 'want_off'), '0');
+      const vars = { device: device.name, object: deviceSite(env, dev)?.name || '', who };
+      await broadcastDevice(env, dev, render(env, on ? 'manual_on' : 'manual_off', vars));
     } catch (e) {
       return done(`Не вдалося: ${e.message}`.slice(0, 190));
     }
@@ -215,7 +224,7 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
     return done();
   }
   if (act === 'pc') {
-    const known = a2.startsWith('site.') ? siteTree(env).some((n) => n.key === a2) : Boolean(DEVICES[a2]);
+    const known = a2.startsWith('site.') ? siteTree(env).some((n) => n.key === a2) : Boolean(deviceById(env, a2));
     if (!known || target.role === 'admin') return done('Не можна');
     const { kind, next, options } = await nextPerm(env, target, a2);
     if (kind === 'device' && options.length === 1) return done("Спершу відкрий доступ до об'єкта");
@@ -269,5 +278,11 @@ export async function onCallback(env, cq) {
     return done();
   }
   if (act === 'd' || act === 'h' || act === 'dc') return handleDevice(env, cq, me, act, a1, a2, done);
+  if (act === 's') return onSettingsCallback(env, cq, me, String(cq.data).split(':').slice(1), done);
+  if (act === 'up') {
+    if (me.role !== 'admin') return done('Лише для адміна');
+    await send(env, me.chat_id, await startUpdate(env));
+    return done();
+  }
   return handleAdmin(env, cq, me, act, a1, a2, done);
 }

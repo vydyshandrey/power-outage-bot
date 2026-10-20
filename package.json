@@ -1,7 +1,7 @@
 {
   "name": "home-bot",
-  "version": "1.5.0",
-  "description": "Telegram bot that switches a Midea water heater off during power outages, based on a Deye inverter. Runs on Cloudflare Workers.",
+  "version": "1.6.0",
+  "description": "Telegram bot that switches appliances off during power outages and back on when power returns. Deye, SmartESS and SmartValue inverters, Midea water heaters. Runs on Cloudflare Workers, set up in Telegram.",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -24,5 +24,18 @@
     "globals": "^15.15.0",
     "prettier": "^3.9.10",
     "wrangler": "^4.151.2"
+  },
+  "cloudflare": {
+    "bindings": {
+      "TG_BOT_TOKEN": {
+        "description": "Токен Telegram-бота від @BotFather."
+      },
+      "ACCESS_KEY": {
+        "description": "Ключ адміна: будь-які латинські літери й цифри, 30+ знаків. Запиши його: ним ти станеш адміном бота."
+      },
+      "DB": {
+        "description": "База даних бота. Створюється автоматично."
+      }
+    }
   }
 }

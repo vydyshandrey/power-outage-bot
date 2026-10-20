@@ -1,16 +1,16 @@
-# Налаштування для свого дому: заміни значення в <...> (інструкція — README.md або AGENTS.md).
-# Секрети сюди НЕ пишуться — їх додають у Cloudflare (див. README).
-name = "home-bot"                 # назва воркера; має збігатися з назвою в Cloudflare
+# Технічні налаштування воркера. Усе про твій дім (об'єкти, інвертори, пристрої, тексти
+# повідомлень, люди) налаштовується в боті: ⚙️ Налаштування. Паролі — лише в секретах Cloudflare.
+name = "home-bot"                 # назва воркера в Cloudflare
 main = "src/index.js"
 compatibility_date = "2026-10-16"
 keep_vars = true
 
+# Базу Cloudflare створює сам під час першого розгортання.
 [[d1_databases]]
 binding = "DB"
 database_name = "home-bot"
-database_id = "<ID бази D1>"      # Cloudflare → Storage & databases → D1 → твоя база
 
-# Перевірка кожні 2 хв. Альтернатива — зовнішній пінгер (README, розділ «Розклад»).
+# Перевірка кожні 2 хв.
 [triggers]
 crons = ["*/2 * * * *"]
 
@@ -20,29 +20,3 @@ crons = ["*/2 * * * *"]
 
 [observability]
 enabled = true
-
-# Пристрої. Спочатку можна лишити порожніми, розгорнути й відкрити /discover?key=<ACCESS_KEY>
-[vars]
-INVERTER = "deye"                 # deye — Deye; dess — SmartESS, WatchPower; valueclouds — SmartValue
-# Кілька об'єктів (дім, майстерня, дача) в одному боті — замість INVERTER.
-# Перший об'єкт керує бойлером; хто бачить який об'єкт, адмін налаштовує в «👥 Користувачі».
-# SITES = [
-#   { id = "home", name = "Дім", inverter = "deye" },
-#   { id = "shop", name = "Майстерня", inverter = "valueclouds" },
-# ]
-DEYE_SN = ""                      # серійний номер інвертора Deye
-# Для INVERTER = "dess" — значення з /discover:
-# DESS_PN = ""
-# DESS_SN = ""
-# DESS_DEVCODE = ""
-# DESS_DEVADDR = ""
-# DESS_PLATFORM = "shinemonitor"  # лише для застосунку SmartClient for Solar
-# Для INVERTER = "valueclouds" (застосунок SmartValue):
-# Усе є в застосунку: пристрій → «Деталі пристрою».
-# VC_PN = ""                      # PN
-# VC_SN = ""                      # SN
-# VC_DEVCODE = ""                 # «Протокол зв'язку»
-# VC_DEVADDR = ""                 # «Адреса зв'язку»
-MIDEA_DEVICE_ID = ""              # ідентифікатор бойлера Midea
-TZ = "Europe/Kyiv"
-# NOTIFY_NAME = "Асистент"     # підпис службових повідомлень /notify (необов'язково)

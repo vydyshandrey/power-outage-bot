@@ -9,7 +9,7 @@ export default [
     languageOptions: { ecmaVersion: 2022, sourceType: 'module', globals: globals.serviceworker },
   },
   {
-    files: ['test/**/*.mjs', '*.config.js'],
+    files: ['test/**/*.mjs', 'scripts/**/*.mjs', '*.config.js'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',

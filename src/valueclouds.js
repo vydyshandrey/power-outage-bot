@@ -42,20 +42,28 @@ async function readJson(res) {
 
 const reason = (j) => j.message || j.errorMessage || `код ${j.code}`;
 
-/** @param {import('./config.js').Env} env */
-async function login(env) {
+/**
+ * @typedef {object} VcConn one SmartValue account
+ * @property {import('./config.js').Env} env
+ * @property {string} user
+ * @property {string} password
+ * @property {string} cacheKey storage key of the cached token
+ */
+
+/** @param {VcConn} c */
+async function login(c) {
   const res = await fetch(`${BASE}/ppr/web/login/login`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      account: env.VC_USER,
-      password: await hash('SHA-1', env.VC_PASSWORD),
+      account: c.user,
+      password: await hash('SHA-1', c.password),
       project: PROJECT,
     }),
   });
   const j = await readJson(res);
   if (!j.success || !j.data?.token) throw new ValueCloudsError(`SmartValue вхід: ${reason(j)}`);
-  await kvSet(env, 'vc_token', j.data.token);
+  await kvSet(c.env, c.cacheKey, j.data.token);
   return j.data.token;
 }
 
@@ -63,9 +71,9 @@ async function login(env) {
  * Authenticated GET. The token lifetime is unknown, so a rejected call is retried once
  * with a fresh login, whatever the error was.
  */
-async function vcGet(env, path, params) {
+async function vcGet(c, path, params) {
   for (const fresh of [false, true]) {
-    const token = (!fresh && (await kvGet(env, 'vc_token'))) || (await login(env));
+    const token = (!fresh && (await kvGet(c.env, c.cacheKey))) || (await login(c));
     const res = await fetch(`${BASE}${path}?${new URLSearchParams(params)}`, {
       headers: { Token: token, project: PROJECT, i18n: 'en_US' },
     });
@@ -116,45 +124,45 @@ export function parseValueClouds(data) {
   };
 }
 
-const deviceParams = (env, overrides = {}) => {
-  for (const k of ['VC_PN', 'VC_SN']) {
-    if (!env[k]) throw new ValueCloudsError(`${k} не задано: див. AGENTS.md, гілка SmartValue`);
-  }
+const deviceParams = (params, overrides = {}) => {
+  for (const k of ['pn', 'sn']) if (!params[k]) throw new ValueCloudsError(`Не вказано ${k.toUpperCase()} інвертора`);
   return {
-    pn: env.VC_PN,
-    sn: env.VC_SN,
-    devcode: env.VC_DEVCODE || KNOWN_DEVICE_CODES[0].devcode,
-    devaddr: env.VC_DEVADDR || KNOWN_DEVICE_CODES[0].devaddr,
+    pn: params.pn,
+    sn: params.sn,
+    devcode: params.devcode || KNOWN_DEVICE_CODES[0].devcode,
+    devaddr: params.devaddr || KNOWN_DEVICE_CODES[0].devaddr,
     i18n: 'en_US',
     ...overrides,
   };
 };
 
-/** @returns {Promise<import('./deye.js').Reading>} */
-export async function valueCloudsLatest(env) {
-  return parseValueClouds(await vcGet(env, '/ppe/api/auth/web/querySPDeviceLastData', deviceParams(env)));
+const LAST_DATA = '/ppe/api/auth/web/querySPDeviceLastData';
+
+/** @param {VcConn} c @returns {Promise<import('./deye.js').Reading>} */
+export async function valueCloudsLatest(c, params) {
+  return parseValueClouds(await vcGet(c, LAST_DATA, deviceParams(params)));
+}
+
+/** Checks the login (the platform has no device list). @param {VcConn} c */
+export async function valueCloudsLogin(c) {
+  await login(c);
 }
 
 /**
- * The platform has no known device-list call, so /discover checks the login and
- * tries the known devcode/devaddr pairs for the PN and SN from wrangler.toml.
+ * Tries the given identifiers, and if devcode/devaddr are not known, the pairs seen on real devices.
+ * @param {VcConn} c
+ * @returns {Promise<{params: Record<string, string>, sample: import('./deye.js').Reading}>}
  */
-export async function valueCloudsDiscover(env) {
-  await login(env);
-  if (!env.VC_PN || !env.VC_SN) {
-    return {
-      login: 'ok',
-      next: 'Впиши VC_PN (номер на Wi-Fi-модулі) і VC_SN (серійний номер інвертора) у wrangler.toml',
-    };
-  }
-  const tried = [];
-  for (const code of KNOWN_DEVICE_CODES) {
+export async function valueCloudsProbe(c, params) {
+  const candidates = params.devcode && params.devaddr ? [{}] : KNOWN_DEVICE_CODES;
+  let last;
+  for (const code of candidates) {
     try {
-      const r = parseValueClouds(await vcGet(env, '/ppe/api/auth/web/querySPDeviceLastData', deviceParams(env, code)));
-      return { login: 'ok', VC_DEVCODE: code.devcode, VC_DEVADDR: code.devaddr, sample: r };
+      const p = { ...params, ...code };
+      return { params: p, sample: parseValueClouds(await vcGet(c, LAST_DATA, deviceParams(p))) };
     } catch (e) {
-      tried.push({ ...code, error: e.message });
+      last = e;
     }
   }
-  return { login: 'ok', error: 'жодна відома пара devcode/devaddr не підійшла', tried };
+  throw last;
 }

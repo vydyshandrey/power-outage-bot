@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.5.0';
+export const VERSION = '1.6.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -45,64 +45,113 @@ export const RANK = { user: 1, notify: 1, control: 1, admin: 3 };
 export const LEVELS = ['none', 'view', 'control'];
 export const LEVEL_LABEL = { none: '🚫 немає', view: '👁 бачить', control: '🎛 керує' };
 
-/** Controllable devices and the site each belongs to. New device types are added here. */
-export const DEVICES = {
-  boiler: { name: 'Бойлер', icon: '🚿', site: 'primary' },
+/** Device types the bot can control. A new type (socket, ATS) gets a driver in devices.js. */
+export const DEVICE_TYPES = {
+  midea_boiler: { name: 'Бойлер', icon: '🚿' },
 };
 
 /**
- * Whether a device is configured for this deployment.
- * @param {Env} env
- * @param {string} dev device key from DEVICES
- */
-export const deviceConfigured = (env, dev) => (dev === 'boiler' ? Boolean(env.MIDEA_DEVICE_ID) : true);
-
-/**
  * @typedef {object} Site
- * @property {string} id short latin id, part of storage keys; never rename it
- * @property {string} name shown in messages
+ * @property {string} id technical id, part of storage keys; never changes
+ * @property {string} name shown in messages; the owner sets it in the bot
  * @property {string} inverter which cloud its inverter reports to (see inverter.js)
- * @property {boolean} primary the first site: keeps the historical storage keys, owns the boiler
+ * @property {number} account which set of cloud secrets to use: 1 → DESS_USER, 2 → DESS_USER_2 …
+ * @property {Record<string, string>} params inverter identifiers in that cloud (sn, pn …)
+ * @property {boolean} primary the first site keeps the historical storage keys
  */
 
 /**
- * Sites (homes, workshops) with their inverters, from the SITES variable.
- * Without SITES there is one site, "Дім", with the inverter from INVERTER.
+ * @typedef {object} Device
+ * @property {string} id technical id; "boiler" for the first one (historical storage keys)
+ * @property {string} type key of DEVICE_TYPES
+ * @property {string} name
+ * @property {string} icon
+ * @property {string} site id of the site it belongs to
+ * @property {Record<string, string>} params identifiers in the vendor cloud
+ * @property {boolean} auto switched off by automation when the grid goes down
+ */
+
+/**
+ * Configuration that lived in wrangler.toml before 1.6.0. Used once, to seed the database
+ * of an existing deployment, and as a fallback before the database is loaded.
  * @param {Env} env
  * @returns {Site[]}
  */
-export function sitesOf(env) {
+export function legacySites(env) {
   let list = env.SITES;
   if (typeof list === 'string') list = list.trim() ? JSON.parse(list) : null;
-  if (!Array.isArray(list) || !list.length) list = [{ id: 'home', name: 'Дім', inverter: env.INVERTER || 'deye' }];
+  if (!Array.isArray(list) || !list.length) {
+    const any = env.DEYE_SN || env.DESS_SN || env.VC_SN;
+    list = any ? [{ id: 'home', name: 'Дім', inverter: env.INVERTER || 'deye' }] : [];
+  }
   return list.map((x, i) => {
-    if (!/^[a-z0-9_-]+$/i.test(String(x.id))) throw new Error(`SITES: id «${x.id}» має бути латиницею без пробілів`);
-    return { id: String(x.id), name: String(x.name || x.id), inverter: String(x.inverter || 'deye'), primary: i === 0 };
+    const inverter = String(x.inverter || 'deye');
+    const params =
+      inverter === 'deye'
+        ? { sn: env.DEYE_SN || '' }
+        : inverter === 'dess'
+          ? {
+              pn: env.DESS_PN,
+              sn: env.DESS_SN,
+              devcode: env.DESS_DEVCODE,
+              devaddr: env.DESS_DEVADDR,
+              platform: env.DESS_PLATFORM,
+            }
+          : { pn: env.VC_PN, sn: env.VC_SN, devcode: env.VC_DEVCODE, devaddr: env.VC_DEVADDR };
+    for (const k of Object.keys(params)) if (!params[k]) delete params[k];
+    return { id: String(x.id), name: String(x.name || x.id), inverter, account: 1, params, primary: i === 0 };
   });
 }
+
+/** @param {Env} env @returns {Device[]} */
+export function legacyDevices(env) {
+  const site = legacySites(env)[0];
+  if (!env.MIDEA_DEVICE_ID || !site) return [];
+  return [
+    {
+      id: 'boiler',
+      type: 'midea_boiler',
+      name: DEVICE_TYPES.midea_boiler.name,
+      icon: DEVICE_TYPES.midea_boiler.icon,
+      site: site.id,
+      params: { device_id: String(env.MIDEA_DEVICE_ID) },
+      auto: true,
+    },
+  ];
+}
+
+/**
+ * Sites, in display order. Loaded from the database for every request (see store.js).
+ * @param {Env} env
+ * @returns {Site[]}
+ */
+export const sitesOf = (env) => env.CFG?.sites ?? legacySites(env);
+
+/** @param {Env} env @returns {Device[]} */
+export const devicesOf = (env) => env.CFG?.devices ?? legacyDevices(env);
+
+/** @param {Env} env @param {string} id */
+export const deviceById = (env, id) => devicesOf(env).find((d) => d.id === id) || null;
 
 /** Permission key of a site. */
 export const siteKey = (site) => `site.${site.id}`;
 
 /**
- * Sites with the configured devices that belong to them: the structure of the permissions screen.
+ * Sites with the devices that belong to them: the structure of the access screen.
  * @param {Env} env
  * @returns {Array<{site: Site, key: string, devices: string[]}>}
  */
 export function siteTree(env) {
-  const sites = sitesOf(env);
-  return sites.map((site) => ({
+  const devices = devicesOf(env);
+  return sitesOf(env).map((site) => ({
     site,
     key: siteKey(site),
-    devices: Object.keys(DEVICES).filter(
-      (dev) =>
-        deviceConfigured(env, dev) && (DEVICES[dev].site === 'primary' ? site.primary : DEVICES[dev].site === site.id)
-    ),
+    devices: devices.filter((d) => d.site === site.id).map((d) => d.id),
   }));
 }
 
-/** The site a device belongs to. @returns {Site} */
-export const deviceSite = (env, dev) => siteTree(env).find((n) => n.devices.includes(dev))?.site || sitesOf(env)[0];
+/** The site a device belongs to. @returns {Site | undefined} */
+export const deviceSite = (env, id) => sitesOf(env).find((s) => s.id === deviceById(env, id)?.site) || sitesOf(env)[0];
 
 /**
  * @typedef {object} Env
@@ -138,5 +187,8 @@ export const deviceSite = (env, dev) => siteTree(env).find((n) => n.devices.incl
  * @property {string} MIDEA_PASSWORD
  * @property {string} [MIDEA_DEVICE_ID]
  * @property {string} [TZ]
+ * @property {{sites: Site[], devices: Device[], settings: Record<string, string>, templates: Record<string, string>}} [CFG]
+ *   configuration loaded from the database for this request
+ * @property {string} [GH_TOKEN] optional: lets the "Оновити" button start the update in GitHub directly
  * @property {string} [COLO] Cloudflare data centre of the current request (diagnostics only)
  */

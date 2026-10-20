@@ -17,23 +17,37 @@ export async function tg(env, method, body) {
   return r.json();
 }
 
-/** Persistent reply keyboard; admins get the users button. */
+/** Persistent reply keyboard; admins get users and settings. */
 export const mainKeyboard = (role) => ({
   keyboard:
     role === 'admin'
-      ? [[{ text: '📊 Статус' }, { text: '🏠 Пристрої' }], [{ text: '👥 Користувачі' }]]
+      ? [
+          [{ text: '📊 Статус' }, { text: '🏠 Пристрої' }],
+          [{ text: '👥 Користувачі' }, { text: '⚙️ Налаштування' }],
+        ]
       : [[{ text: '📊 Статус' }, { text: '🏠 Пристрої' }]],
   resize_keyboard: true,
 });
 
-export function send(env, chatId, text, extra = {}) {
-  return tg(env, 'sendMessage', {
-    chat_id: chatId,
-    text,
-    parse_mode: 'HTML',
-    disable_web_page_preview: true,
-    ...extra,
-  });
+/** Removes HTML tags, for resending a text whose markup Telegram rejected. */
+const plain = (text) =>
+  text
+    .replace(/<[^>]+>/g, '')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+
+/**
+ * Sends an HTML message. A text the owner edited may contain broken markup; then it is
+ * sent again as plain text rather than lost.
+ */
+export async function send(env, chatId, text, extra = {}) {
+  const body = { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...extra };
+  const r = await tg(env, 'sendMessage', body);
+  if (r && r.ok === false && /parse entities/i.test(r.description || '')) {
+    return tg(env, 'sendMessage', { ...body, text: plain(text), parse_mode: undefined });
+  }
+  return r;
 }
 
 /** Replaces the message a callback button belongs to. */

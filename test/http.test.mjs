@@ -15,8 +15,8 @@ test('/discover lists Midea appliances and the inverter', async () => {
   const w = createWorld();
   const res = await w.http(`/discover?key=${ACCESS_KEY}`);
   const body = await res.json();
-  assert.equal(body.midea[0].MIDEA_DEVICE_ID, '100000000000001');
-  assert.equal(body.sites.home.found[0].devices[0].DEYE_SN, 'SN1');
+  assert.equal(body.midea[0].params.device_id, '100000000000001');
+  assert.deepEqual(body.sites.home.found[0], { label: 'Дім · SN1', params: { sn: 'SN1' } });
 });
 
 test('/tick with TICK_KEY runs the check', async () => {

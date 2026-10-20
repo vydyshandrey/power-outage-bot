@@ -63,7 +63,7 @@ test('Midea is down while switching off: silent retries, one escalation after 10
   assert.ok(!textsTo(first, ADMIN).some((t) => t.includes('Бойлер')), 'no boiler message yet');
 
   const later = await w.ticksFor(12);
-  const escalations = textsTo(later, MEMBER).filter((t) => t.startsWith('⚠️ Не вдалося вимкнути'));
+  const escalations = textsTo(later, MEMBER).filter((t) => t.startsWith('⚠️ Бойлер: не вдалося вимкнути'));
   assert.equal(escalations.length, 1, 'exactly one "do it by hand" message');
 
   w.mideaFails = 0;
@@ -71,7 +71,7 @@ test('Midea is down while switching off: silent retries, one escalation after 10
   const done = await w.tick();
   assert.ok(
     textsTo(done, ADMIN).some((t) =>
-      /^⛔ Бойлер вимкнено автоматично \(через \d+ хв після зникнення світла\)\.$/.test(t)
+      /^⛔ Бойлер вимкнено автоматично\.\n⏱ Через \d+ хв після зникнення світла\.$/.test(t)
     )
   );
   assert.deepEqual(w.controls, ['off']);
@@ -89,12 +89,12 @@ test('Midea is down while switching back on: one escalation, then a late "on" wi
   await w.tick();
   w.mideaFails = Infinity;
   const waiting = await w.ticksFor(18);
-  assert.equal(textsTo(waiting, ADMIN).filter((t) => t.startsWith('⚠️ Не вдалося увімкнути')).length, 1);
+  assert.equal(textsTo(waiting, ADMIN).filter((t) => t.startsWith('⚠️ Бойлер: не вдалося увімкнути')).length, 1);
 
   w.mideaFails = 0;
   w.step(120);
   const done = await w.tick();
-  assert.ok(textsTo(done, ADMIN).some((t) => /^🔥 Бойлер увімкнено автоматично \(із запізненням \d+ хв\)\.$/.test(t)));
+  assert.ok(textsTo(done, ADMIN).some((t) => /^🔥 Бойлер увімкнено автоматично\.\n⏱ Із запізненням \d+ хв\.$/.test(t)));
 });
 
 test('without a configured boiler the bot only reports the grid', async () => {
@@ -114,7 +114,7 @@ test('a release without user-facing notes is announced to admins only, once', as
   const sent = await w.tick();
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chat, ADMIN);
-  assert.match(sent[0].text, /^🔧 Бот оновлено до v\d+\.\d+\.\d+\.$/);
+  assert.match(sent[0].text, /^🔧 Бот оновлено до v\d+\.\d+\.\d+\./);
   w.step(120);
   assert.equal((await w.tick()).length, 0);
 });

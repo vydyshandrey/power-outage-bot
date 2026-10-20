@@ -85,7 +85,7 @@ test('DESS down for 10+ min: alert names the platform', async () => {
   await w.tick();
   w.dessFails = Infinity;
   const down = await w.ticksFor(14);
-  assert.equal(down.filter((m) => m.text.startsWith('⚠️ DESS Monitor не відповідає')).length, 1);
+  assert.equal(down.filter((m) => m.text.startsWith('⚠️ SmartESS не відповідає')).length, 1);
 });
 
 test('DESS data that stops changing is reported as stale', async () => {
@@ -93,18 +93,17 @@ test('DESS data that stops changing is reported as stale', async () => {
   await w.tick();
   w.clock += 900; // the dongle stops uploading; the platform keeps returning the old snapshot
   const stale = await w.tick();
-  assert.ok(textsTo(stale, ADMIN).some((t) => t.startsWith('⚠️ Дані DESS Monitor не оновлювались')));
+  assert.ok(textsTo(stale, ADMIN).some((t) => t.startsWith('⚠️ Дані SmartESS не оновлювались')));
 });
 
-test('/discover with DESS lists the values for wrangler.toml', async () => {
+test('/discover with DESS lists the inverters the account sees', async () => {
   const w = createWorld().useDess();
   const body = await (await w.http(`/discover?key=${ACCESS_KEY}`)).json();
   assert.deepEqual(body.sites.home.found[0], {
-    plant: 'Майстерня',
-    devices: [
-      { DESS_PN: 'W0012345678901', DESS_SN: '96342210100001', DESS_DEVCODE: '2451', DESS_DEVADDR: '1', alias: 'PV18' },
-    ],
+    label: 'Майстерня · PV18 · 96342210100001',
+    params: { pn: 'W0012345678901', sn: '96342210100001', devcode: '2451', devaddr: '1' },
   });
+  assert.equal(body.sites.home.reading.soc, 88);
 });
 
 test('DESS with a wrong password reports the platform error', async () => {

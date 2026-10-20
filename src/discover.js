@@ -1,8 +1,11 @@
-/** Setup helper behind /discover: which inverters and boilers the configured accounts can see. */
+/**
+ * Diagnostics behind /discover: what the configured accounts can see. Setting things up is
+ * done in the bot (⚙️ Налаштування); this page helps when something does not work.
+ */
 
 import { sitesOf } from './config.js';
-import { inverterDiscover } from './inverter.js';
-import { Midea } from './midea.js';
+import { listDevices } from './devices.js';
+import { inverterLatest, listInverters, missingSecrets } from './inverter.js';
 
 /** @param {import('./config.js').Env} env */
 export async function discover(env) {
@@ -10,27 +13,33 @@ export async function discover(env) {
   const out = { midea: null, sites: {} };
 
   try {
-    const r = await new Midea(env).listAppliances();
-    out.midea = (r?.list || []).map((a) => ({
-      MIDEA_DEVICE_ID: String(a.id),
-      name: a.name,
-      type: a.type, // 0xE2 is an electric water heater
-      model: a.productModel || a.modelNumber || '',
-      online: a.onlineStatus === '1',
-    }));
+    out.midea = await listDevices(env, 'midea_boiler');
   } catch (e) {
     out.midea = { error: e.message };
   }
 
   for (const site of sitesOf(env)) {
-    const entry = { name: site.name, inverter: site.inverter };
-    try {
-      entry.found = await inverterDiscover(env, site);
-    } catch (e) {
-      entry.error = e.message;
+    const entry = { name: site.name, inverter: site.inverter, params: site.params };
+    const missing = missingSecrets(env, site.inverter, site.account);
+    if (missing.length) entry.missing_secrets = missing;
+    else {
+      try {
+        entry.found = await listInverters(
+          env,
+          site.inverter,
+          site.account,
+          site.params.platform ? { platform: site.params.platform } : {}
+        );
+      } catch (e) {
+        entry.error = e.message;
+      }
+      try {
+        entry.reading = await inverterLatest(env, site);
+      } catch (e) {
+        entry.reading_error = e.message;
+      }
     }
     out.sites[site.id] = entry;
   }
-
   return out;
 }

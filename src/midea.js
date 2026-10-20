@@ -166,43 +166,30 @@ export class Midea {
     throw lastError;
   }
 
-  /** Appliances visible to the account (for /discover). */
+  /** Appliances visible to the account (for adding a device). */
   listAppliances() {
     return this.call('/v1/appliance/user/list/get', {});
   }
 
-  /** Current boiler state: power, cur_temperature, temperature (setpoint), … */
-  status() {
-    return this.call('/v1/device/status/lua/get', {
-      applianceCode: this.env.MIDEA_DEVICE_ID,
-      command: { query: {} },
-    });
+  /**
+   * Current boiler state: power, cur_temperature, temperature (setpoint), …
+   * @param {string} applianceCode device id in the Midea cloud
+   */
+  status(applianceCode) {
+    return this.call('/v1/device/status/lua/get', { applianceCode, command: { query: {} } });
   }
 
   /**
    * Switches the boiler. The API expects the full current status alongside the change.
    * @returns {Promise<object>} status before the change
    */
-  async setPower(on) {
-    const current = (await this.status()) || {};
+  async setPower(applianceCode, on) {
+    const current = (await this.status(applianceCode)) || {};
     const status = Object.fromEntries(Object.entries(current).filter(([k]) => !READ_ONLY_FIELDS.includes(k)));
     await this.call('/v1/device/lua/control', {
-      applianceCode: this.env.MIDEA_DEVICE_ID,
+      applianceCode,
       command: { control: { power: on ? 'on' : 'off' }, status },
     });
     return current;
   }
-}
-
-/**
- * The only place that changes boiler power: switches it, remembers the state and logs who did it.
- * @param {string} actor user name or "автоматика"
- */
-export async function boilerPower(env, on, actor) {
-  const before = await new Midea(env).setPower(on);
-  await kvSet(env, 'boiler_power', on ? 'on' : 'off');
-  await logEvent(env, on ? 'power_on' : 'power_off', 'boiler', actor, {
-    temp: Number(before.cur_temperature) || null,
-    colo: env.COLO || '',
-  });
 }

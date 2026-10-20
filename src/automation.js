@@ -3,10 +3,10 @@
  *
  *   1. Read the inverter. Cloud hiccups are silent; an outage longer than
  *      GIVEUP_SEC produces one alert and one "recovered" message.
- *   2. Detect grid transitions and notify everyone, with the duration of the previous state.
- *   3. Grid lost → switch the boiler off, retrying on every tick until it works.
- *   4. Grid back for ON_DELAY_SEC → switch the boiler on, but only if automation switched it off.
- *   5. If a boiler action keeps failing for GIVEUP_SEC, ask a human once, keep retrying.
+ *   2. Detect grid transitions and notify the site's viewers, with the duration of the previous state.
+ *   3. Grid lost → switch the site's automated devices off, retrying on every tick until it works.
+ *   4. Grid back for ON_DELAY_SEC → switch them on, but only those automation switched off.
+ *   5. If a device action keeps failing for GIVEUP_SEC, ask a human once, keep retrying.
  */
 
 import {
@@ -16,13 +16,16 @@ import {
   ON_DELAY_SEC,
   STALE_SEC,
   VERSION,
+  devicesOf,
   siteKey,
   sitesOf,
 } from './config.js';
 import { kvGet, kvSet, logEnergy, logEvent } from './db.js';
+import { DK, deviceState, setDevicePower } from './devices.js';
 import { inverterConfigured, inverterLatest, inverterName } from './inverter.js';
-import { Midea, boilerPower } from './midea.js';
+import { render } from './messages.js';
 import { broadcast, broadcastDevice, mainKeyboard } from './telegram.js';
+import { checkUpdates } from './updates.js';
 import { NL, esc, fmtDur, fmtHM, now } from './util.js';
 
 const AUTOMATION = 'автоматика';
@@ -38,15 +41,21 @@ export async function reportError(env, where, e) {
 }
 
 /**
- * What changed for people using the bot, per minor release. A minor release listed here
- * is announced to everyone with the refreshed keyboard; anything else is a short note
- * to admins (internal changes, support for other hardware).
+ * Release notes per minor release. USER_NOTES go to everyone with the refreshed keyboard;
+ * ADMIN_NOTES go to admins only (new settings, other hardware). A release with neither,
+ * or a patch release, gets a one-line note to admins.
  */
 const USER_NOTES = {
   1.1: [
     '• Керування пристроями тепер у меню «🏠 Пристрої».',
     '• У статусі видно, скільки світло є чи немає, і споживання від інвертора.',
     '• Сповіщення про світло показують тривалість.',
+  ],
+};
+const ADMIN_NOTES = {
+  1.6: [
+    "• ⚙️ Налаштування: об'єкти, пристрої, тексти повідомлень, імена людей і часовий пояс — тепер у боті.",
+    '• Нові версії приходять повідомленням з кнопкою «⬆️ Оновити».',
   ],
 };
 
@@ -56,13 +65,16 @@ export async function announce(env) {
   const prev = (await kvGet(env, 'announced')) || '';
   if (prev === VERSION) return;
   await kvSet(env, 'announced', VERSION);
-  const notes = USER_NOTES[minor];
-  if (!notes || prev.startsWith(minor)) {
-    await broadcast(env, `🔧 Бот оновлено до v${VERSION}.`, 'admin');
+  const newMinor = !prev.startsWith(minor);
+  if (newMinor && USER_NOTES[minor]) {
+    const text = [`🆕 Бот оновлено до v${VERSION}.`, ...USER_NOTES[minor]].join(NL);
+    await broadcast(env, text, 'user', (u) => ({ reply_markup: mainKeyboard(u.role) }));
     return;
   }
-  const text = [`🆕 Бот оновлено до v${VERSION}.`, ...notes].join(NL);
-  await broadcast(env, text, 'user', (u) => ({ reply_markup: mainKeyboard(u.role) }));
+  const notes = newMinor ? ADMIN_NOTES[minor] || [] : [];
+  await broadcast(env, [`🔧 Бот оновлено до v${VERSION}.`, ...notes].join(NL), 'admin', (u) => ({
+    reply_markup: mainKeyboard(u.role),
+  }));
 }
 
 /* ---------- per-site state ---------- */
@@ -72,16 +84,19 @@ export async function announce(env) {
  * deployment that predates sites carries its state over; others get an "@id" suffix.
  * ("deye_" names are historical too: they hold the state of whatever inverter the site has.)
  */
-const K = (site, k) => (site.primary ? k : `${k}@${site.id}`);
+export const K = (site, k) => (site.primary ? k : `${k}@${site.id}`);
 
 /** Event-log device for a site's grid events; the first site keeps the historical "grid". */
 export const gridDevice = (site) => (site.primary ? 'grid' : `grid@${site.id}`);
 
-/** "Майстерня · " in front of messages when there is more than one site. */
-const prefix = (env, site) => (sitesOf(env).length > 1 ? `${site.name} · ` : '');
+const several = (env) => sitesOf(env).length > 1;
 
-/** "Deye" or "SmartValue (Майстерня)" in admin messages. */
-const source = (env, site) => `${inverterName(site)}${sitesOf(env).length > 1 ? ` (${site.name})` : ''}`;
+/** Variables every site message has. */
+const siteVars = (env, site) => ({
+  where: several(env) ? `${site.name} · ` : '',
+  object: site.name,
+  source: `${inverterName(site)}${several(env) ? ` (${site.name})` : ''}`,
+});
 
 /* ---------- inverter availability ---------- */
 
@@ -90,11 +105,8 @@ async function inverterDown(env, site, e) {
   if (!since) return kvSet(env, K(site, 'deye_fail_since'), now());
   if (now() - since < GIVEUP_SEC || (await kvGet(env, K(site, 'deye_alerted'))) === '1') return;
   await kvSet(env, K(site, 'deye_alerted'), '1');
-  await broadcast(
-    env,
-    `⚠️ ${source(env, site)} не відповідає ${fmtDur(now() - since)}. Автоматика на паузі, доки зв'язок не повернеться.${NL}<code>${esc(e.message || e)}</code>`,
-    'admin'
-  );
+  const vars = { ...siteVars(env, site), duration: fmtDur(now() - since), error: e.message || String(e) };
+  await broadcast(env, render(env, 'inverter_down', vars), 'admin');
 }
 
 async function inverterUp(env, site) {
@@ -103,11 +115,8 @@ async function inverterUp(env, site) {
   await kvSet(env, K(site, 'deye_fail_since'), '0');
   if ((await kvGet(env, K(site, 'deye_alerted'))) === '1') {
     await kvSet(env, K(site, 'deye_alerted'), '0');
-    await broadcast(
-      env,
-      `✅ ${source(env, site)} знову відповідає (не було зв'язку ${fmtDur(now() - since)}).`,
-      'admin'
-    );
+    const vars = { ...siteVars(env, site), duration: fmtDur(now() - since) };
+    await broadcast(env, render(env, 'inverter_up', vars), 'admin');
   }
 }
 
@@ -118,24 +127,23 @@ async function checkStale(env, site, reading) {
   if (age > STALE_SEC) {
     if ((await kvGet(env, key)) !== '1') {
       await kvSet(env, key, '1');
-      await broadcast(
-        env,
-        `⚠️ Дані ${source(env, site)} не оновлювались ${fmtDur(age)}. Автоматика на паузі, доки логер не повернеться.`,
-        'admin'
-      );
+      await broadcast(env, render(env, 'stale', { ...siteVars(env, site), duration: fmtDur(age) }), 'admin');
     }
     return true;
   }
   if ((await kvGet(env, key)) === '1') {
     await kvSet(env, key, '0');
-    await broadcast(env, `✅ Дані ${source(env, site)} знову оновлюються.`, 'admin');
+    await broadcast(env, render(env, 'fresh', siteVars(env, site)), 'admin');
   }
   return false;
 }
 
 /* ---------- grid transitions ---------- */
 
-/** Records a grid change and notifies the site's viewers. On the first site, resets the boiler task. */
+/** Automated devices of a site. */
+const automated = (env, site) => devicesOf(env).filter((d) => d.site === site.id && d.auto);
+
+/** Records a grid change, notifies the site's viewers and opens the device tasks. */
 async function onGridChange(env, site, prev, d) {
   const prevSince = Number(await kvGet(env, K(site, 'grid_since'))) || null;
   const dur = prevSince ? d.ts - prevSince : null;
@@ -144,80 +152,70 @@ async function onGridChange(env, site, prev, d) {
 
   if (prev !== null) {
     await logEvent(env, d.grid ? 'grid_on' : 'grid_off', gridDevice(site), 'inverter', { at: d.ts, prev_dur: dur });
-    const p = prefix(env, site);
-    const lines = d.grid
-      ? [`💡 ${p}Світло з'явилось о ${fmtHM(d.ts)}, ${d.volt} В.`, dur ? `Світла не було ${fmtDur(dur)}.` : null]
-      : [
-          `🔌 ${p}Світло зникло о ${fmtHM(d.ts)}.`,
-          dur ? `Світло було ${fmtDur(dur)}.` : null,
-          `🔋 Від інвертора: споживання ${d.load} Вт, батарея ${d.soc}%.`,
-        ];
-    await broadcastDevice(env, siteKey(site), lines.filter(Boolean).join(NL));
+    const vars = {
+      ...siteVars(env, site),
+      time: fmtHM(d.ts),
+      duration: dur ? fmtDur(dur) : '',
+      load: d.load,
+      soc: d.soc,
+      volt: d.volt,
+    };
+    await broadcastDevice(env, siteKey(site), render(env, d.grid ? 'grid_on' : 'grid_off', vars));
   }
 
-  if (!site.primary) return;
-  // Grid lost → the boiler must go off; the task stays open until it succeeds.
-  await kvSet(env, 'want_off', d.grid ? '0' : '1');
-  await kvSet(env, 'off_alerted', '0');
-  await kvSet(env, 'on_alerted', '0');
+  // Grid lost → the devices must go off; each task stays open until it succeeds.
+  for (const dev of automated(env, site)) {
+    await kvSet(env, DK(dev, 'want_off'), d.grid ? '0' : '1');
+    await kvSet(env, DK(dev, 'off_alerted'), '0');
+    await kvSet(env, DK(dev, 'on_alerted'), '0');
+  }
 }
 
-/* ---------- boiler control ---------- */
+/* ---------- device control ---------- */
 
 /** One "do it manually" message after GIVEUP_SEC of failures; retries continue. */
-async function escalateOnce(env, flagKey, since, text) {
-  if (now() - since < GIVEUP_SEC || (await kvGet(env, flagKey)) === '1') return;
-  await kvSet(env, flagKey, '1');
-  await broadcastDevice(env, 'boiler', text);
+async function escalateOnce(env, dev, flag, since, key, site) {
+  if (now() - since < GIVEUP_SEC || (await kvGet(env, DK(dev, flag))) === '1') return;
+  await kvSet(env, DK(dev, flag), '1');
+  await broadcastDevice(env, dev.id, render(env, key, { device: dev.name, object: site.name }));
 }
 
-const lateNote = (since, template) => (now() - since > LATE_NOTE_SEC ? template(fmtDur(now() - since)) : '');
+const delay = (since) => (now() - since > LATE_NOTE_SEC ? fmtDur(now() - since) : '');
 
-async function switchBoilerOff(env, d) {
-  const since = Number(await kvGet(env, 'grid_since')) || d.ts;
+async function switchOff(env, site, dev, d) {
+  const since = Number(await kvGet(env, K(site, 'grid_since'))) || d.ts;
   try {
-    const st = await new Midea(env).status();
-    if (st?.power === 'on') {
-      await boilerPower(env, false, AUTOMATION);
-      await kvSet(env, 'boiler_auto_off', '1');
-      const late = lateNote(since, (t) => ` (через ${t} після зникнення світла)`);
-      await broadcastDevice(env, 'boiler', `⛔ Бойлер вимкнено автоматично${late}.`);
+    if ((await deviceState(env, dev)).on) {
+      await setDevicePower(env, dev, false, AUTOMATION);
+      await kvSet(env, DK(dev, 'boiler_auto_off'), '1');
+      const vars = { device: dev.name, object: site.name, delay: delay(since) };
+      await broadcastDevice(env, dev.id, render(env, 'device_auto_off', vars));
     }
-    await kvSet(env, 'want_off', '0');
+    await kvSet(env, DK(dev, 'want_off'), '0');
   } catch {
-    await escalateOnce(
-      env,
-      'off_alerted',
-      since,
-      '⚠️ Не вдалося вимкнути бойлер за 10 хв: Midea не відповідає. Вимкни його вручну. Бот пробуватиме далі.'
-    );
+    await escalateOnce(env, dev, 'off_alerted', since, 'device_off_failed', site);
   }
 }
 
-async function switchBoilerBackOn(env, d) {
-  const gridSince = Number(await kvGet(env, 'grid_since')) || d.ts;
+async function switchBackOn(env, site, dev, d) {
+  const gridSince = Number(await kvGet(env, K(site, 'grid_since'))) || d.ts;
   if (d.ts - gridSince < ON_DELAY_SEC) return;
   const since = gridSince + ON_DELAY_SEC;
   try {
-    await boilerPower(env, true, AUTOMATION);
-    await kvSet(env, 'boiler_auto_off', '0');
-    const late = lateNote(since, (t) => ` (із запізненням ${t})`);
-    await broadcastDevice(env, 'boiler', `🔥 Бойлер увімкнено автоматично${late}.`);
+    await setDevicePower(env, dev, true, AUTOMATION);
+    await kvSet(env, DK(dev, 'boiler_auto_off'), '0');
+    const vars = { device: dev.name, object: site.name, delay: delay(since) };
+    await broadcastDevice(env, dev.id, render(env, 'device_auto_on', vars));
   } catch {
-    await escalateOnce(
-      env,
-      'on_alerted',
-      since,
-      '⚠️ Не вдалося увімкнути бойлер за 10 хв після повернення світла: Midea не відповідає. Увімкни його вручну. Бот пробуватиме далі.'
-    );
+    await escalateOnce(env, dev, 'on_alerted', since, 'device_on_failed', site);
   }
 }
 
 /* ---------- entry point ---------- */
 
-/** One site: read its inverter, report grid changes; the first site also drives the boiler. */
+/** One site: read its inverter, report grid changes, drive its automated devices. */
 async function tickSite(env, site) {
-  if (!inverterConfigured(env, site)) return; // device IDs not in wrangler.toml yet
+  if (!inverterConfigured(env, site)) return; // the inverter is not chosen yet
 
   let d;
   try {
@@ -241,10 +239,14 @@ async function tickSite(env, site) {
     if (d.grid) return; // switching back on waits for ON_DELAY_SEC of stable grid
   }
 
-  if (!site.primary || !env.MIDEA_DEVICE_ID) return; // the boiler lives at the first site
-
-  if (!d.grid && (await kvGet(env, 'want_off')) === '1') return switchBoilerOff(env, d);
-  if (d.grid && (await kvGet(env, 'boiler_auto_off')) === '1') return switchBoilerBackOn(env, d);
+  for (const dev of automated(env, site)) {
+    try {
+      if (!d.grid && (await kvGet(env, DK(dev, 'want_off'))) === '1') await switchOff(env, site, dev, d);
+      if (d.grid && (await kvGet(env, DK(dev, 'boiler_auto_off'))) === '1') await switchBackOn(env, site, dev, d);
+    } catch (e) {
+      await reportError(env, dev.name, e);
+    }
+  }
 }
 
 /** @param {import('./config.js').Env} env */
@@ -257,5 +259,10 @@ export async function tick(env) {
     } catch (e) {
       await reportError(env, site.name, e);
     }
+  }
+  try {
+    await checkUpdates(env);
+  } catch {
+    /* an unreachable GitHub must not disturb the automation */
   }
 }

@@ -10,7 +10,18 @@ const OK_CODES = ['0', '1000000', '1106000', 0, 1000000, 1106000];
 /** Refresh the token a day before it expires. */
 const TOKEN_MARGIN_SEC = 86400;
 
-const baseUrl = (env) => env.DEYE_API || DEFAULT_DEYE_API;
+/**
+ * @typedef {object} DeyeConn one DeyeCloud account
+ * @property {import('./config.js').Env} env
+ * @property {string} appId
+ * @property {string} appSecret
+ * @property {string} email
+ * @property {string} password
+ * @property {string} [api] regional OpenAPI address
+ * @property {string} cacheKey storage key of the cached token
+ */
+
+const baseUrl = (c) => c.api || DEFAULT_DEYE_API;
 
 /**
  * @typedef {object} Reading
@@ -23,49 +34,52 @@ const baseUrl = (env) => env.DEYE_API || DEFAULT_DEYE_API;
  * @property {number} load house consumption, W
  */
 
-/** Cached access token; `force` obtains a new one. */
-export async function deyeToken(env, force = false) {
+/** Cached access token; `force` obtains a new one. @param {DeyeConn} c */
+export async function deyeToken(c, force = false) {
+  const { env } = c;
   if (!force) {
-    const cached = await kvGet(env, 'deye_token');
+    const cached = await kvGet(env, c.cacheKey);
     if (cached) {
       const { token, exp } = JSON.parse(cached);
       if (exp > now()) return token;
     }
   }
-  const res = await fetch(`${baseUrl(env)}/account/token?appId=${encodeURIComponent(env.DEYE_APP_ID)}`, {
+  const res = await fetch(`${baseUrl(c)}/account/token?appId=${encodeURIComponent(c.appId)}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      appSecret: env.DEYE_APP_SECRET,
-      email: env.DEYE_EMAIL,
-      password: (await hash('SHA-256', env.DEYE_PASSWORD)).toLowerCase(),
+      appSecret: c.appSecret,
+      email: c.email,
+      password: (await hash('SHA-256', c.password)).toLowerCase(),
     }),
   });
   const j = await res.json();
   if (!j.accessToken) throw new Error(`Deye auth: ${j.code} ${j.msg || ''}`);
   const token = j.accessToken.split(' ').pop();
   const ttl = Number(j.expiresIn) || 86400 * 30;
-  await kvSet(env, 'deye_token', JSON.stringify({ token, exp: now() + ttl - TOKEN_MARGIN_SEC }));
+  await kvSet(env, c.cacheKey, JSON.stringify({ token, exp: now() + ttl - TOKEN_MARGIN_SEC }));
   return token;
 }
 
 /**
- * Latest reading of the configured inverter. Retries once with a fresh token.
+ * Latest reading of an inverter. Retries once with a fresh token.
+ * @param {DeyeConn} c
+ * @param {string} sn inverter serial number
  * @returns {Promise<Reading>}
  */
-export async function deyeLatest(env) {
-  if (!env.DEYE_SN) throw new Error('DEYE_SN не задано: відкрий /discover?key=<ACCESS_KEY>');
+export async function deyeLatest(c, sn) {
+  if (!sn) throw new Error('Не вказано серійний номер інвертора Deye');
   const fetchLatest = async (token) => {
-    const res = await fetch(`${baseUrl(env)}/device/latest`, {
+    const res = await fetch(`${baseUrl(c)}/device/latest`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
-      body: JSON.stringify({ deviceList: [env.DEYE_SN] }),
+      body: JSON.stringify({ deviceList: [sn] }),
     });
     return { status: res.status, j: await res.json().catch(() => ({})) };
   };
 
-  let r = await fetchLatest(await deyeToken(env));
-  if (r.status === 401 || !OK_CODES.includes(r.j.code)) r = await fetchLatest(await deyeToken(env, true));
+  let r = await fetchLatest(await deyeToken(c));
+  if (r.status === 401 || !OK_CODES.includes(r.j.code)) r = await fetchLatest(await deyeToken(c, true));
   if (!OK_CODES.includes(r.j.code)) throw new Error(`Deye latest: ${r.status} ${r.j.code} ${r.j.msg || ''}`);
 
   const dev = (r.j.deviceDataList || [])[0];
@@ -84,11 +98,11 @@ export async function deyeLatest(env) {
   };
 }
 
-/** Stations with their devices (for /discover). */
-export async function deyeStations(env) {
-  const res = await fetch(`${baseUrl(env)}/station/listWithDevice`, {
+/** Stations with their devices (for discovery). @param {DeyeConn} c */
+export async function deyeStations(c) {
+  const res = await fetch(`${baseUrl(c)}/station/listWithDevice`, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', authorization: `Bearer ${await deyeToken(env)}` },
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${await deyeToken(c)}` },
     body: '{}',
   });
   const j = await res.json();

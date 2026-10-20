@@ -1,9 +1,10 @@
 /**
- * Storage on Cloudflare D1: key-value state, users, per-device permissions, event log.
+ * Storage on Cloudflare D1: key-value state, users, permissions, event log, and the
+ * configuration the owner sets in the bot (sites, devices, message texts, settings).
  * The schema is created lazily on first use, so a fresh database needs no setup.
  */
 
-import { DEVICES, LEVELS, RANK, deviceSite, siteKey, siteTree, sitesOf } from './config.js';
+import { LEVELS, RANK, deviceSite, legacyDevices, legacySites, siteKey, siteTree, sitesOf } from './config.js';
 import { now } from './util.js';
 
 /** Exported for tests, which start from an empty in-memory database. */
@@ -14,35 +15,52 @@ export const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT, ts INTEGER, type TEXT, device TEXT, actor TEXT, data TEXT)',
   'CREATE INDEX IF NOT EXISTS events_dev_ts ON events (device, ts)',
   'CREATE TABLE IF NOT EXISTS energy (ts INTEGER PRIMARY KEY, grid INTEGER, volt REAL, load INTEGER, batt INTEGER, soc INTEGER)',
+  'CREATE TABLE IF NOT EXISTS sites (id TEXT PRIMARY KEY, name TEXT, cloud TEXT, account INTEGER, params TEXT, sort INTEGER)',
+  'CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, type TEXT, name TEXT, icon TEXT, site TEXT, params TEXT, auto INTEGER, sort INTEGER)',
+  'CREATE TABLE IF NOT EXISTS templates (k TEXT PRIMARY KEY, text TEXT)',
 ];
 
-let schemaReady = false;
+/** Databases already prepared in this isolate. */
+const ready = new WeakSet();
 
 /**
- * Returns the D1 binding, creating the schema on first call in this isolate.
+ * Returns the D1 binding, creating the schema and migrating on first use in this isolate.
  * @param {import('./config.js').Env} env
  */
 export async function db(env) {
-  if (!schemaReady) {
+  if (!ready.has(env.DB)) {
+    ready.add(env.DB);
     await env.DB.batch(SCHEMA.map((sql) => env.DB.prepare(sql)));
-    schemaReady = true;
     await migrate(env);
   }
   return env.DB;
 }
 
 /**
- * Permission history:
+ * Data history:
  *   v2 (1.1.0) per-device permissions;
  *   v3 (1.4.0) sites — everyone who got grid notifications keeps them for the first site;
  *   v4 (1.5.0) two roles and per-site levels — "control" users control the first site,
- *              "notify" users see it; a device row becomes a limit below the site level.
+ *              "notify" users see it; a device row becomes a limit below the site level;
+ *   v5 (1.6.0) configuration moves from wrangler.toml into the database, where the owner
+ *              edits it in the bot; users get an alias column.
  */
 export async function migrate(env) {
   const D = env.DB;
   const row = await D.prepare("SELECT v FROM kv WHERE k='schema_v'").first();
-  if ((Number(row?.v) || 0) >= 4) return;
-  const home = siteKey(sitesOf(env)[0]);
+  const v = Number(row?.v) || 0;
+  if (v >= 5) return;
+  if (v < 4) await migrateRoles(env);
+  await migrateConfig(env);
+  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','5') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+}
+
+/** v4: old roles become levels on the first site, nobody loses access. */
+async function migrateRoles(env) {
+  const D = env.DB;
+  const first = sitesOf(env)[0];
+  if (!first) return;
+  const home = siteKey(first);
   const { results } = await D.prepare("SELECT * FROM users WHERE status='approved' AND role != 'admin'").all();
   for (const u of results) {
     const perms = Object.fromEntries(
@@ -50,19 +68,38 @@ export async function migrate(env) {
         (r) => [r.device, r.perm]
       )
     );
-    // The first site gets the highest of: what the role allowed, what any of its devices allowed.
+    // The first site gets the highest of: what the role allowed, what the boiler allowed.
     const fromRole = u.role === 'control' ? 'control' : 'view';
-    const fromDevices = Object.keys(DEVICES).map((d) => perms[d] || 'none');
-    const level = [fromRole, ...fromDevices].reduce((a, b) => (LEVELS.indexOf(b) > LEVELS.indexOf(a) ? b : a));
+    const level = LEVELS.indexOf(perms.boiler || 'none') > LEVELS.indexOf(fromRole) ? perms.boiler : fromRole;
     await setPerm(env, u.chat_id, home, level);
-    // A device keeps a row only if it was below that level; otherwise it simply follows the site.
-    for (const d of Object.keys(DEVICES)) {
-      if (perms[d] && LEVELS.indexOf(perms[d]) < LEVELS.indexOf(level)) await setPerm(env, u.chat_id, d, perms[d]);
-      else await clearPerm(env, u.chat_id, d);
-    }
+    // The boiler keeps a row only if it was below that level; otherwise it simply follows the site.
+    if (perms.boiler && LEVELS.indexOf(perms.boiler) < LEVELS.indexOf(level)) {
+      await setPerm(env, u.chat_id, 'boiler', perms.boiler);
+    } else await clearPerm(env, u.chat_id, 'boiler');
     await D.prepare("UPDATE users SET role='user' WHERE chat_id=?").bind(u.chat_id).run();
   }
-  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','4') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+}
+
+/** v5: sites, devices and the time zone from wrangler.toml become rows the owner edits in the bot. */
+async function migrateConfig(env) {
+  const D = env.DB;
+  const cols = (await D.prepare('PRAGMA table_info(users)').all()).results.map((c) => c.name);
+  if (!cols.includes('alias')) await D.prepare('ALTER TABLE users ADD COLUMN alias TEXT').run();
+
+  if (!(await D.prepare('SELECT 1 FROM sites LIMIT 1').first())) {
+    let sort = 0;
+    for (const s of legacySites(env)) {
+      await D.prepare('INSERT INTO sites (id,name,cloud,account,params,sort) VALUES (?,?,?,?,?,?)')
+        .bind(s.id, s.name, s.inverter, s.account, JSON.stringify(s.params), sort++)
+        .run();
+    }
+    for (const d of legacyDevices(env)) {
+      await D.prepare('INSERT INTO devices (id,type,name,icon,site,params,auto,sort) VALUES (?,?,?,?,?,?,?,?)')
+        .bind(d.id, d.type, d.name, d.icon, d.site, JSON.stringify(d.params), d.auto ? 1 : 0, sort++)
+        .run();
+    }
+  }
+  if (env.TZ) await D.prepare("INSERT OR IGNORE INTO kv (k,v) VALUES ('cfg.tz',?)").bind(env.TZ).run();
 }
 
 /* ---------- key-value state ---------- */
@@ -117,7 +154,9 @@ export async function getPerm(env, user, key) {
   if (!user || user.status !== 'approved') return 'none';
   if (user.role === 'admin') return 'control';
   if (key.startsWith('site.')) return (await row(env, user.chat_id, key)) || 'none';
-  const siteLevel = (await row(env, user.chat_id, siteKey(deviceSite(env, key)))) || 'none';
+  const site = deviceSite(env, key);
+  if (!site) return 'none';
+  const siteLevel = (await row(env, user.chat_id, siteKey(site))) || 'none';
   const limit = await row(env, user.chat_id, key);
   return limit ? minLevel(siteLevel, limit) : siteLevel;
 }
@@ -144,7 +183,8 @@ export async function clearPerm(env, chatId, key) {
 /** A newly approved user sees the first site; everything else the admin opens explicitly. */
 export async function resetPerms(env, chatId) {
   await (await db(env)).prepare('DELETE FROM user_devices WHERE chat_id=?').bind(chatId).run();
-  await setPerm(env, chatId, siteKey(sitesOf(env)[0]), 'view');
+  const first = sitesOf(env)[0];
+  if (first) await setPerm(env, chatId, siteKey(first), 'view');
 }
 
 /** Configured devices the user may at least view. */
