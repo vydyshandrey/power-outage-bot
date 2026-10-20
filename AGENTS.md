@@ -6,7 +6,7 @@
 
 Telegram-бот на Cloudflare Workers (безкоштовний тариф).
 
-- Бере стан мережі з хмари інвертора **Deye**.
+- Бере стан мережі з хмари інвертора: **Deye** (DeyeCloud) або **DESS Monitor** (застосунки SmartESS, WatchPower, Energy-Mate; інвертори MUST, Anenji, PowMr, Axpert тощо з Wi-Fi-модулем).
 - Коли світло зникає, вимикає бойлер **Midea**. Коли світло стабільно є 5 хв, вмикає його назад, але лише якщо раніше вимикала саме автоматика.
 - Бот має ролі й права на кожен пристрій та показує історію.
 
@@ -23,7 +23,11 @@ Telegram-бот на Cloudflare Workers (безкоштовний тариф).
 
 Спитай людину:
 
-- Чи є інвертор Deye, підключений до застосунку або сайту DeyeCloud? Без нього проєкт не працює.
+- Яким застосунком людина дивиться інвертор?
+  - DeyeCloud → гілка Deye (`INVERTER = "deye"`).
+  - SmartESS, WatchPower, Energy-Mate або інший, що входить на dessmonitor.com тим самим логіном → гілка DESS (`INVERTER = "dess"`).
+  - SmartClient for Solar → теж DESS, але з `DESS_PLATFORM = "shinemonitor"`.
+  - Інший застосунок → цей інвертор поки не підтримується.
 - Чи є бойлер Midea, яким вона керує через застосунок SmartHome (MSmartHome)? Без нього бот працюватиме лише як сповіщення про світло: просто лиши `MIDEA_DEVICE_ID` порожнім.
 - Чи є акаунти GitHub і Cloudflare? Якщо ні, людина створить їх на кроці 4.
 
@@ -32,12 +36,21 @@ Telegram-бот на Cloudflare Workers (безкоштовний тариф).
 1. Telegram → [@BotFather](https://t.me/BotFather) → `/newbot` → назва → адреса, що закінчується на `bot`.
 2. BotFather видасть токен. Людина не показує його тобі, а збереже до кроку 6 як `TG_BOT_TOKEN`.
 
-## 2. Доступ до Deye (робить людина, ти підказуєш)
+## 2. Доступ до інвертора (робить людина, ти підказуєш)
+
+### Гілка Deye
 
 1. [developer.deyecloud.com](https://developer.deyecloud.com): зареєструватись тим самим email, що й у DeyeCloud.
 2. Створити застосунок (Application) і зберегти **AppId** та **AppSecret**.
 3. Секрети на кроці 6: `DEYE_APP_ID`, `DEYE_APP_SECRET`, а також `DEYE_EMAIL` і `DEYE_PASSWORD` від DeyeCloud.
 4. Якщо акаунт DeyeCloud не європейський, на кроці 7 додай змінну `DEYE_API` з адресою OpenAPI потрібного регіону. Типова адреса — `https://eu1-developer.deyecloud.com/v1.0`.
+
+### Гілка DESS (SmartESS, WatchPower тощо)
+
+1. Окремої реєстрації не треба: бот входить тим самим логіном і паролем, що й застосунок.
+2. Секрети на кроці 6: `DESS_USER` і `DESS_PASSWORD`.
+3. У `wrangler.toml` на кроці 7: `INVERTER = "dess"` і значення `DESS_*` з `/discover`.
+4. API DESS Monitor неофіційний. Якщо вхід не проходить, перевір, що людина заходить з цим логіном на [dessmonitor.com](https://www.dessmonitor.com/) у браузері.
 
 ## 3. Окремий акаунт Midea (робить людина)
 
@@ -79,7 +92,8 @@ npx wrangler deploy
 | Секрет                                                          | Значення                                              |
 | --------------------------------------------------------------- | ----------------------------------------------------- |
 | `TG_BOT_TOKEN`                                                  | токен з кроку 1                                       |
-| `DEYE_APP_ID`, `DEYE_APP_SECRET`, `DEYE_EMAIL`, `DEYE_PASSWORD` | крок 2                                                |
+| `DEYE_APP_ID`, `DEYE_APP_SECRET`, `DEYE_EMAIL`, `DEYE_PASSWORD` | крок 2, гілка Deye                                    |
+| `DESS_USER`, `DESS_PASSWORD`                                    | крок 2, гілка DESS                                    |
 | `MIDEA_EMAIL`, `MIDEA_PASSWORD`                                 | крок 3                                                |
 | `ACCESS_KEY`                                                    | довгий випадковий рядок, 30+ символів; це ключ адміна |
 
@@ -87,9 +101,11 @@ npx wrangler deploy
 
 ## 7. Пристрої
 
-1. Людина відкриває `<URL>/discover?key=<ACCESS_KEY>`. Сторінка покаже `DEYE_SN` інвертора й `MIDEA_DEVICE_ID` бойлера.
+1. Людина відкриває `<URL>/discover?key=<ACCESS_KEY>`. Сторінка покаже інвертор (`DEYE_SN` або чотири значення `DESS_PN`, `DESS_SN`, `DESS_DEVCODE`, `DESS_DEVADDR`) і `MIDEA_DEVICE_ID` бойлера.
+   - До першого `/discover` для DESS у `wrangler.toml` уже має стояти `INVERTER = "dess"`, інакше бот шукатиме Deye.
    - `midea: {error: ... 3102 ...}` — неправильні дані Midea, або бойлером не поділились з новим акаунтом.
-   - `deye: {error: ...}` — неправильні AppId, AppSecret чи пароль, або не той регіон (`DEYE_API`).
+   - `inverter: {error: ...}` з Deye — неправильні AppId, AppSecret чи пароль, або не той регіон (`DEYE_API`).
+   - `inverter: {error: ... ERR_PASSWORD_VERIF_FAIL ...}` з DESS — неправильний логін чи пароль, або акаунт з іншої платформи (спробуй `DESS_PLATFORM = "shinemonitor"`).
 2. Впиши ці значення в `[vars]` у `wrangler.toml`. Шлях A: збережи зміну в GitHub, і воркер розгорнеться сам. Шлях B: `npx wrangler deploy`.
 
 ## 8. Підключення Telegram і перший адмін
@@ -100,7 +116,7 @@ npx wrangler deploy
 ## 9. Перевірка
 
 - Кнопка **📊 Статус** у боті показує світло, батарею й бойлер.
-- Рядок «Дані Deye: N хв тому» має бути не більше ~10 хв.
+- Рядок «Дані Deye (або DESS Monitor): N хв тому» має бути не більше ~10 хв.
 - Розклад працює, якщо у вкладці воркера **Metrics** кожні 2 хв з'являються виклики `scheduled`. Можна перевірити й вручну: `<URL>/tick?key=<ACCESS_KEY>` повертає `"ok":true`.
 - Якщо людина хоче, проведіть живий тест: вимкнути ввідний автомат на 10 хв. Протягом ~2–7 хв прийде «Світло зникло», бойлер вимкнеться, а після повернення світла й 5 хв стабільної мережі увімкнеться.
 
@@ -112,7 +128,8 @@ npx wrangler deploy
 | `/setup` повертає `forbidden`                  | неправильний `key`; перевір `ACCESS_KEY` у секретах                                                                                                                                                                           |
 | Бот мовчить на `/start`                        | не відкривали `/setup`, або неправильний `TG_BOT_TOKEN`                                                                                                                                                                       |
 | `Midea 3102` час від часу                      | відома нестабільність хмари Midea; бот сам повторює спроби. Якщо збої часті, запускай перевірку ззовні: [cron-job.org](https://cron-job.org) кожні 2 хв на `<URL>/tick?t=<TICK_KEY>`, а в `wrangler.toml` постав `crons = []` |
-| «Deye не відповідає 10 хв»                     | збій хмари Deye або логера; бот повідомить, коли зв'язок повернеться                                                                                                                                                          |
+| «Deye / DESS Monitor не відповідає 10 хв»      | збій хмари виробника або Wi-Fi-модуля; бот повідомить, коли зв'язок повернеться                                                                                                                                               |
+| Статус показує світло при SBU-режимі           | так і має бути: бот визначає мережу за напругою на вході, а не за режимом роботи інвертора                                                                                                                                    |
 
 ## Для змін у коді
 

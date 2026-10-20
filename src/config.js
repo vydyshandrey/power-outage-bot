@@ -1,12 +1,12 @@
 /**
  * Static configuration and tunables.
  *
- * Everything specific to a particular home (device IDs, time zone, Deye region)
+ * Everything specific to a particular home (inverter type, device IDs, time zone)
  * comes from Worker variables, see wrangler.toml → [vars]. Credentials come from
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.1.5';
+export const VERSION = '1.2.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -58,12 +58,21 @@ export const deviceConfigured = (env, dev) => (dev === 'boiler' ? Boolean(env.MI
  * @property {string} [NOTIFY_KEY]
  * @property {string} [NOTIFY_NAME]
  * @property {string} [TICK_KEY]
- * @property {string} DEYE_APP_ID
- * @property {string} DEYE_APP_SECRET
- * @property {string} DEYE_EMAIL
- * @property {string} DEYE_PASSWORD
+ * @property {'deye'|'dess'} [INVERTER] which cloud the inverter reports to; default deye
+ * @property {string} [DEYE_APP_ID]
+ * @property {string} [DEYE_APP_SECRET]
+ * @property {string} [DEYE_EMAIL]
+ * @property {string} [DEYE_PASSWORD]
  * @property {string} [DEYE_SN]
  * @property {string} [DEYE_API]
+ * @property {string} [DESS_USER] SmartESS / WatchPower account
+ * @property {string} [DESS_PASSWORD]
+ * @property {'dessmonitor'|'shinemonitor'} [DESS_PLATFORM]
+ * @property {string} [DESS_COMPANY_KEY]
+ * @property {string} [DESS_PN] dongle (collector) PN, from /discover
+ * @property {string} [DESS_SN]
+ * @property {string} [DESS_DEVCODE]
+ * @property {string} [DESS_DEVADDR]
  * @property {string} MIDEA_EMAIL
  * @property {string} MIDEA_PASSWORD
  * @property {string} [MIDEA_DEVICE_ID]

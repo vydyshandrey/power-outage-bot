@@ -14,7 +14,7 @@ database_id = "<ID бази D1>"      # Cloudflare → Storage & databases → D
 [triggers]
 crons = ["*/2 * * * *"]
 
-# Необов'язково: запускати воркер ближче до хмар Midea/Deye в Європі
+# Необов'язково: запускати воркер ближче до хмар виробників у Європі
 # [placement]
 # region = "aws:eu-central-1"
 
@@ -23,7 +23,14 @@ enabled = true
 
 # Пристрої. Спочатку можна лишити порожніми, розгорнути й відкрити /discover?key=<ACCESS_KEY>
 [vars]
+INVERTER = "deye"                 # deye — хмара Deye; dess — SmartESS, WatchPower та інші застосунки DESS Monitor
 DEYE_SN = ""                      # серійний номер інвертора Deye
+# Для INVERTER = "dess" — значення з /discover:
+# DESS_PN = ""
+# DESS_SN = ""
+# DESS_DEVCODE = ""
+# DESS_DEVADDR = ""
+# DESS_PLATFORM = "shinemonitor"  # лише для застосунку SmartClient for Solar
 MIDEA_DEVICE_ID = ""              # ідентифікатор бойлера Midea
 TZ = "Europe/Kyiv"
 # NOTIFY_NAME = "Асистент"     # підпис службових повідомлень /notify (необов'язково)

@@ -2,7 +2,7 @@
 
 import { DEVICES } from './config.js';
 import { db, getPerm, kvGet, viewableDevices } from './db.js';
-import { deyeLatest } from './deye.js';
+import { inverterLatest, inverterName } from './inverter.js';
 import { Midea } from './midea.js';
 import { NL, esc, fmtDur, fmtHM, fmtTime, now } from './util.js';
 
@@ -10,7 +10,7 @@ import { NL, esc, fmtDur, fmtHM, fmtTime, now } from './util.js';
 export async function statusText(env, user) {
   const lines = [];
   try {
-    const d = await deyeLatest(env);
+    const d = await inverterLatest(env);
     // If the tick has not recorded a fresh transition yet, count from the reading itself.
     const stored = await kvGet(env, 'grid');
     const since = stored === (d.grid ? 'on' : 'off') ? Number(await kvGet(env, 'grid_since')) || null : d.ts;
@@ -23,9 +23,9 @@ export async function statusText(env, user) {
       lines.push(`🔌 Світла немає${dur}`);
       lines.push(`🔋 Від інвертора: споживання ${d.load} Вт, батарея ${d.soc}% (${Math.abs(d.batt)} Вт)`);
     }
-    lines.push(`🕒 Дані Deye: ${fmtDur(now() - d.ts)} тому`);
+    lines.push(`🕒 Дані ${inverterName(env)}: ${fmtDur(now() - d.ts)} тому`);
   } catch (e) {
-    lines.push(`Deye: помилка (${esc(e.message)})`);
+    lines.push(`Інвертор: помилка (${esc(e.message)})`);
   }
   for (const dev of await viewableDevices(env, user)) lines.push(await deviceLine(env, dev));
   return lines.join(NL);

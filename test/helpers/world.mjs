@@ -1,5 +1,5 @@
 /**
- * Test world: an in-memory D1, fake Deye/Midea/Telegram clouds and a controllable clock.
+ * Test world: an in-memory D1, fake Deye/DESS/Midea/Telegram clouds and a controllable clock.
  * Each test creates its own world; nothing touches the network.
  */
 
@@ -17,6 +17,59 @@ crypto.subtle.digest = async (alg, data) =>
 // Retry pauses are irrelevant in tests.
 const realSetTimeout = globalThis.setTimeout;
 globalThis.setTimeout = (fn) => realSetTimeout(fn, 0);
+
+const sha1 = (s) => nodeCrypto.createHash('sha1').update(s).digest('hex');
+
+export const DESS_USER = 'owner smartess@example.com';
+export const DESS_PASSWORD = 'pa ss+word';
+
+/**
+ * Fake DESS Monitor. Checks signatures the way the platform does: over the raw
+ * "&action=…" tail of the URL, exactly as transmitted.
+ */
+function fakeDess(w, url) {
+  const q = new URL(url).searchParams;
+  const tail = url.slice(url.indexOf('&action='));
+  const action = q.get('action');
+  if (action === 'authSource') {
+    if (q.get('usr') !== DESS_USER) return { err: 1, desc: 'ERR_USER_NOT_FOUND' };
+    if (q.get('sign') !== sha1(q.get('salt') + sha1(DESS_PASSWORD) + tail))
+      return { err: 2, desc: 'ERR_PASSWORD_VERIF_FAIL' };
+    w.dessLogins++;
+    w.dessToken = `tok${w.dessLogins}`;
+    return { err: 0, dat: { token: w.dessToken, secret: 'sec', expire: 7 * 86400 } };
+  }
+  if (q.get('token') !== w.dessToken || q.get('sign') !== sha1(q.get('salt') + 'sec' + w.dessToken + tail)) {
+    return { err: 260, desc: 'ERR_TOKEN_INVALID' };
+  }
+  if (action === 'queryDeviceLastData') {
+    if (w.dessFails > 0) {
+      w.dessFails--;
+      return { err: 12, desc: 'ERR_SYSTEM_EXCEPTION' };
+    }
+    const on = w.grid;
+    return {
+      err: 0,
+      dat: [
+        { title: 'Timestamp', val: `stamp-${w.deyeTs}`, unit: '' },
+        { title: 'Working State', val: on ? 'Line Mode' : 'Battery Mode', unit: '' },
+        { title: 'AC Input Voltage', val: on ? '231.5' : '0.0', unit: 'V' },
+        { title: 'AC Input Frequency', val: on ? '50.0' : '0.0', unit: 'Hz' },
+        { title: 'Battery Voltage', val: '26.4', unit: 'V' },
+        { title: 'Battery Capacity', val: '88', unit: '%' },
+        { title: 'Battery Charging Current', val: on ? '2' : '0', unit: 'A' },
+        { title: 'Battery Discharge Current', val: on ? '0' : '15', unit: 'A' },
+        { title: 'Output Active Power', val: '396', unit: 'W' },
+      ],
+    };
+  }
+  if (action === 'queryPlants') return { err: 0, dat: { plant: [{ pid: 7, pname: 'Майстерня' }] } };
+  if (action === 'webQueryCollectorsEs') return { err: 0, dat: { total: 1, collector: [{ pn: 'W0012345678901' }] } };
+  if (action === 'queryCollectorDevices') {
+    return { err: 0, dat: { dev: [{ sn: '96342210100001', devcode: 2451, devaddr: 1, devalias: 'PV18' }] } };
+  }
+  return { err: 404, desc: `unknown action ${action}` };
+}
 
 /** Minimal D1 API over node:sqlite. */
 function createD1() {
@@ -56,6 +109,8 @@ export function createWorld({ users = true } = {}) {
     mideaFails: 0, // next N Midea calls answer 3102
     routeFails: false, // regional route lookup answers 10004
     deyeFails: 0, // next N Deye /device/latest calls answer 500
+    dessFails: 0, // next N DESS data calls answer a platform error
+    dessLogins: 0,
     sent: [], // Telegram messages: { chat, text, markup }
     controls: [], // Midea power commands: 'on' | 'off'
     pending: [],
@@ -73,6 +128,7 @@ export function createWorld({ users = true } = {}) {
 
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
+    if (url.startsWith('https://api.dessmonitor.com/public/')) return json(fakeDess(w, url));
     const body = init.body ? JSON.parse(init.body) : {};
     if (url.includes('/account/token')) return json({ accessToken: 'bearer T', expiresIn: 5_184_000 });
     if (url.includes('/device/latest')) {
@@ -174,6 +230,21 @@ export function createWorld({ users = true } = {}) {
       INSERT INTO user_devices VALUES (${MEMBER},'boiler','control'),(${GUEST},'boiler','view');
       INSERT INTO kv VALUES ('schema_v','2'),('grid','on'),('grid_since','${w.clock - 3 * 3600}'),('announced','${VERSION}');`);
   }
+
+  /** Switches the deployment to an inverter on DESS Monitor. */
+  w.useDess = () => {
+    for (const k of ['DEYE_APP_ID', 'DEYE_APP_SECRET', 'DEYE_EMAIL', 'DEYE_PASSWORD', 'DEYE_SN']) delete w.env[k];
+    Object.assign(w.env, {
+      INVERTER: 'dess',
+      DESS_USER,
+      DESS_PASSWORD,
+      DESS_PN: 'W0012345678901',
+      DESS_SN: '96342210100001',
+      DESS_DEVCODE: '2451',
+      DESS_DEVADDR: '1',
+    });
+    return w;
+  };
 
   /** Advances time; the inverter reports a fresh reading at the same moment. */
   w.step = (sec) => {

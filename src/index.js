@@ -6,7 +6,7 @@
  *   POST /notify?k=NOTIFY_KEY      service message to admins, e.g. from an assistant or a script
  *   GET  /tick?t=TICK_KEY          run the check (for an external scheduler)
  *   GET  /setup?key=ACCESS_KEY     register the webhook and bot commands
- *   GET  /discover?key=ACCESS_KEY  list devices visible to the Deye and Midea accounts
+ *   GET  /discover?key=ACCESS_KEY  list devices visible to the inverter and Midea accounts
  *   GET  /tick?key=ACCESS_KEY      run the check manually and show the state
  * The cron trigger (wrangler.toml) runs the same check as /tick.
  */

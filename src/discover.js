@@ -1,11 +1,11 @@
 /** Setup helper behind /discover: which inverters and boilers the configured accounts can see. */
 
-import { deyeStations } from './deye.js';
+import { inverterDiscover } from './inverter.js';
 import { Midea } from './midea.js';
 
 /** @param {import('./config.js').Env} env */
 export async function discover(env) {
-  const out = { midea: null, deye: null };
+  const out = { midea: null, inverter: null };
 
   try {
     const r = await new Midea(env).listAppliances();
@@ -21,15 +21,9 @@ export async function discover(env) {
   }
 
   try {
-    const { stations, code, msg } = await deyeStations(env);
-    out.deye = stations.length
-      ? stations.map((s) => ({
-          station: s.name,
-          devices: (s.deviceListItems || s.deviceList || []).map((d) => ({ DEYE_SN: d.deviceSn, type: d.deviceType })),
-        }))
-      : { error: `${code || ''} ${msg || 'станцій не знайдено'}`.trim() };
+    out.inverter = await inverterDiscover(env);
   } catch (e) {
-    out.deye = { error: e.message };
+    out.inverter = { error: e.message };
   }
 
   return out;

@@ -108,13 +108,13 @@ test('without a configured boiler the bot only reports the grid', async () => {
   assert.deepEqual(w.controls, []);
 });
 
-test('a patch release is announced to admins only, once', async () => {
+test('a release without user-facing notes is announced to admins only, once', async () => {
   const w = createWorld();
   w.db.exec("UPDATE kv SET v='1.1.0' WHERE k='announced'");
   const sent = await w.tick();
   assert.equal(sent.length, 1);
   assert.equal(sent[0].chat, ADMIN);
-  assert.match(sent[0].text, /^🔧 Бот оновлено до v1\.1\.\d+\.$/);
+  assert.match(sent[0].text, /^🔧 Бот оновлено до v\d+\.\d+\.\d+\.$/);
   w.step(120);
   assert.equal((await w.tick()).length, 0);
 });

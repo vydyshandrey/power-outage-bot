@@ -11,7 +11,7 @@
 
 import { ERROR_REPEAT_SEC, GIVEUP_SEC, LATE_NOTE_SEC, ON_DELAY_SEC, STALE_SEC, VERSION } from './config.js';
 import { kvGet, kvSet, logEnergy, logEvent } from './db.js';
-import { deyeLatest } from './deye.js';
+import { inverterConfigured, inverterLatest, inverterName } from './inverter.js';
 import { Midea, boilerPower } from './midea.js';
 import { broadcast, broadcastDevice, mainKeyboard } from './telegram.js';
 import { NL, esc, fmtDur, fmtHM, now } from './util.js';
@@ -29,48 +29,60 @@ export async function reportError(env, where, e) {
 }
 
 /**
- * Tells people about a new version once. Patch releases: a short note to admins.
- * Minor releases: a feature summary to everyone, with the refreshed keyboard.
+ * What changed for people using the bot, per minor release. A minor release listed here
+ * is announced to everyone with the refreshed keyboard; anything else is a short note
+ * to admins (internal changes, support for other hardware).
  */
+const USER_NOTES = {
+  1.1: [
+    '• Керування пристроями тепер у меню «🏠 Пристрої».',
+    '• У статусі видно, скільки світло є чи немає, і споживання від інвертора.',
+    '• Сповіщення про світло показують тривалість.',
+  ],
+};
+
+/** Tells people about a new version once. */
 export async function announce(env) {
   const minor = VERSION.split('.').slice(0, 2).join('.');
   const prev = (await kvGet(env, 'announced')) || '';
   if (prev === VERSION) return;
   await kvSet(env, 'announced', VERSION);
-  if (prev.startsWith(minor)) {
+  const notes = USER_NOTES[minor];
+  if (!notes || prev.startsWith(minor)) {
     await broadcast(env, `🔧 Бот оновлено до v${VERSION}.`, 'admin');
     return;
   }
-  const text = [
-    `🆕 Бот оновлено до v${VERSION}.`,
-    '• Керування пристроями тепер у меню «🏠 Пристрої».',
-    '• У статусі видно, скільки світло є чи немає, і споживання від інвертора.',
-    '• Сповіщення про світло показують тривалість.',
-  ].join(NL);
+  const text = [`🆕 Бот оновлено до v${VERSION}.`, ...notes].join(NL);
   await broadcast(env, text, 'notify', (u) => ({ reply_markup: mainKeyboard(u.role) }));
 }
 
 /* ---------- inverter availability ---------- */
 
-async function deyeDown(env, e) {
+// KV keys keep their historical "deye_" names so existing deployments carry their state over.
+
+async function inverterDown(env, e) {
   const since = Number(await kvGet(env, 'deye_fail_since')) || 0;
   if (!since) return kvSet(env, 'deye_fail_since', now());
   if (now() - since < GIVEUP_SEC || (await kvGet(env, 'deye_alerted')) === '1') return;
   await kvSet(env, 'deye_alerted', '1');
   await broadcast(
     env,
-    `⚠️ Deye не відповідає ${fmtDur(now() - since)}. Автоматика на паузі, доки зв'язок не повернеться.${NL}<code>${esc(e.message || e)}</code>`,
+    `⚠️ ${inverterName(env)} не відповідає ${fmtDur(now() - since)}. Автоматика на паузі, доки зв'язок не повернеться.${NL}<code>${esc(e.message || e)}</code>`,
     'admin'
   );
 }
 
-async function deyeUp(env) {
+async function inverterUp(env) {
   const since = Number(await kvGet(env, 'deye_fail_since')) || 0;
   if (!since) return;
   await kvSet(env, 'deye_fail_since', '0');
   if ((await kvGet(env, 'deye_alerted')) === '1') {
     await kvSet(env, 'deye_alerted', '0');
-    await broadcast(env, `✅ Deye знову відповідає (не було зв'язку ${fmtDur(now() - since)}).`, 'admin');
+    await broadcast(
+      env,
+      `✅ ${inverterName(env)} знову відповідає (не було зв'язку ${fmtDur(now() - since)}).`,
+      'admin'
+    );
   }
 }
 
@@ -82,7 +94,7 @@ async function checkStale(env, reading) {
       await kvSet(env, 'stale', '1');
       await broadcast(
         env,
-        `⚠️ Дані Deye не оновлювались ${fmtDur(age)}. Автоматика на паузі, доки логер не повернеться.`,
+        `⚠️ Дані ${inverterName(env)} не оновлювались ${fmtDur(age)}. Автоматика на паузі, доки логер не повернеться.`,
         'admin'
       );
     }
@@ -90,7 +102,7 @@ async function checkStale(env, reading) {
   }
   if ((await kvGet(env, 'stale')) === '1') {
     await kvSet(env, 'stale', '0');
-    await broadcast(env, '✅ Дані Deye знову оновлюються.', 'admin');
+    await broadcast(env, `✅ Дані ${inverterName(env)} знову оновлюються.`, 'admin');
   }
   return false;
 }
@@ -105,7 +117,7 @@ async function onGridChange(env, prev, d) {
   await kvSet(env, 'grid_since', d.ts);
 
   if (prev !== null) {
-    await logEvent(env, d.grid ? 'grid_on' : 'grid_off', 'grid', 'deye', { at: d.ts, prev_dur: dur });
+    await logEvent(env, d.grid ? 'grid_on' : 'grid_off', 'grid', 'inverter', { at: d.ts, prev_dur: dur });
     const lines = d.grid
       ? [`💡 Світло з'явилось о ${fmtHM(d.ts)}, ${d.volt} В.`, dur ? `Світла не було ${fmtDur(dur)}.` : null]
       : [
@@ -178,15 +190,15 @@ async function switchBoilerBackOn(env, d) {
 /** @param {import('./config.js').Env} env */
 export async function tick(env) {
   await announce(env);
-  if (!env.DEYE_SN) return; // inverter not configured yet
+  if (!inverterConfigured(env)) return; // device IDs not in wrangler.toml yet
 
   let d;
   try {
-    d = await deyeLatest(env);
+    d = await inverterLatest(env);
   } catch (e) {
-    return deyeDown(env, e);
+    return inverterDown(env, e);
   }
-  await deyeUp(env);
+  await inverterUp(env);
 
   if (String(d.ts) !== (await kvGet(env, 'last_deye_ts'))) {
     await kvSet(env, 'last_deye_ts', d.ts);
