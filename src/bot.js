@@ -1,20 +1,17 @@
 /**
  * Telegram update handlers: text messages and inline-button callbacks.
  *
- * Access model: /start sends a request to admins; an admin approves with a role
- * (admin, control, notify) and may fine-tune per-device permissions.
- * The very first /start with ACCESS_KEY creates the first admin.
- *
- * Permissions are set per device and per site (⚡): a site permission decides who sees its
- * status and grid notifications.
+ * Access model: /start sends a request to admins. An admin approves the person as an admin
+ * (everything) or a user. A user gets a level per site (none · sees · controls), and a device
+ * may be limited below its site's level. The very first /start with ACCESS_KEY creates the first admin.
  *
  * Callback data: g:<days> outages · dl device list · d:<dev> card · h:<dev> history ·
- * dc:<dev>:on|off control · pd:<uid> perms view · pc:<uid>:<dev> cycle perm ·
+ * dc:<dev>:on|off control · pd:<uid> access screen · pc:<uid>:<site.id|dev> next level ·
  * a:<uid>:<role> approve · r:<uid> reject or revoke.
  */
 
-import { DEVICES, PERMS, PERM_LABEL, ROLES, SITE_PERMS, permTargets } from './config.js';
-import { db, getPerm, getUser, kvSet, setDefaultPerms, setPerm, usersBy } from './db.js';
+import { DEVICES, LEVELS, LEVEL_LABEL, ROLES, deviceSite, siteKey, siteTree } from './config.js';
+import { clearPerm, db, deviceLimit, getPerm, getUser, kvSet, resetPerms, setPerm, usersBy } from './db.js';
 import { boilerPower } from './midea.js';
 import { deviceCard, deviceHistory, devicesMenu, outagesReport, statusText } from './reports.js';
 import { broadcastDevice, edit, mainKeyboard, send, tg } from './telegram.js';
@@ -24,23 +21,58 @@ const userLabel = (u) => `${esc(u.name || '')}${u.username ? ` @${esc(u.username
 
 const roleButtons = (uid) => [
   [
-    { text: 'Адмін', callback_data: `a:${uid}:admin` },
-    { text: 'Керування', callback_data: `a:${uid}:control` },
-    { text: 'Сповіщення', callback_data: `a:${uid}:notify` },
+    { text: '👤 Користувач', callback_data: `a:${uid}:user` },
+    { text: '👑 Адмін', callback_data: `a:${uid}:admin` },
   ],
 ];
 
+/** "Дім: 🎛 керує · Майстерня: 🚫 немає" */
+async function accessSummary(env, u) {
+  if (u.role === 'admin') return 'Адмін: бачить і керує всім';
+  const parts = [];
+  for (const { site, key } of siteTree(env))
+    parts.push(`${esc(site.name)}: ${LEVEL_LABEL[await getPerm(env, u, key)]}`);
+  return parts.join(' · ');
+}
+
+/**
+ * Permissions screen: each site with its level, its devices indented under it.
+ * A device either follows its site or is limited below it.
+ */
 async function permsView(env, target) {
   const kb = [];
-  for (const [dev, t] of Object.entries(permTargets(env))) {
-    const p = await getPerm(env, target, dev);
-    const label = t.kind === 'site' ? (p === 'none' ? '🚫 не бачить' : '👁 бачить статус') : PERM_LABEL[p];
-    kb.push([{ text: `${t.icon} ${t.name}: ${label}`, callback_data: `pc:${target.chat_id}:${dev}` }]);
+  for (const { site, key, devices } of siteTree(env)) {
+    const level = await getPerm(env, target, key);
+    kb.push([{ text: `⚡ ${site.name}: ${LEVEL_LABEL[level]}`, callback_data: `pc:${target.chat_id}:${key}` }]);
+    for (const dev of devices) {
+      const limit = await deviceLimit(env, target, dev);
+      const label = limit ? LEVEL_LABEL[await getPerm(env, target, dev)] : `як ${site.name}`;
+      const { icon, name } = DEVICES[dev];
+      kb.push([{ text: `      ${icon} ${name}: ${label}`, callback_data: `pc:${target.chat_id}:${dev}` }]);
+    }
   }
   return {
-    text: `📱 Права: ${userLabel(target)}${NL}Натискай, щоб змінити. Пристрої: немає → перегляд → керування. Об'єкти (⚡): хто бачить статус і отримує сповіщення про світло.`,
+    text: [
+      `🔐 Доступ: ${userLabel(target)}`,
+      '',
+      "⚡ Об'єкт: 🚫 немає → 👁 бачить (статус і сповіщення про світло) → 🎛 керує (ще й вмикає пристрої).",
+      "Пристрій під об'єктом за замовчуванням має той самий доступ; можна обмежити, але не розширити.",
+    ].join(NL),
     kb,
   };
+}
+
+/** Next value when an admin taps a line in the permissions screen. */
+async function nextPerm(env, target, key) {
+  if (key.startsWith('site.')) {
+    const cur = await getPerm(env, target, key);
+    return { kind: 'site', next: LEVELS[(LEVELS.indexOf(cur) + 1) % LEVELS.length] };
+  }
+  // Device: follows the site → each level below the site's → back to following the site.
+  const siteLevel = await getPerm(env, target, siteKey(deviceSite(env, key)));
+  const options = [null, ...LEVELS.slice(0, LEVELS.indexOf(siteLevel)).reverse()];
+  const limit = await deviceLimit(env, target, key);
+  return { kind: 'device', next: options[(options.indexOf(limit) + 1) % options.length], options };
 }
 
 /* ---------- messages ---------- */
@@ -64,7 +96,9 @@ async function handleStart(env, msg, user) {
     });
   }
   if (user?.status === 'approved') {
-    return send(env, id, `Ти вже маєш доступ: ${ROLES[user.role]}.`, { reply_markup: mainKeyboard(user.role) });
+    return send(env, id, `Ти вже маєш доступ: ${ROLES[user.role] || ROLES.user}.`, {
+      reply_markup: mainKeyboard(user.role),
+    });
   }
   if (user?.status === 'pending') return send(env, id, 'Запит уже надіслано, чекай на схвалення.');
   if (user?.status === 'rejected') return;
@@ -96,12 +130,12 @@ async function listUsers(env, adminId) {
             inline_keyboard: [
               ...roleButtons(x.chat_id),
               [
-                { text: '📱 Пристрої', callback_data: `pd:${x.chat_id}` },
+                { text: '🔐 Доступ', callback_data: `pd:${x.chat_id}` },
                 { text: '🗑 Прибрати', callback_data: `r:${x.chat_id}` },
               ],
             ],
           };
-    const state = x.status === 'pending' ? '⏳ очікує' : ROLES[x.role];
+    const state = x.status === 'pending' ? '⏳ очікує' : await accessSummary(env, x);
     await send(env, adminId, `${userLabel(x)}${NL}${state}`, kb ? { reply_markup: kb } : {});
   }
 }
@@ -175,30 +209,37 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
   const D = await db(env);
 
   if (act === 'pd') {
-    if (target.role === 'admin') return done('Адмін має доступ до всього');
+    if (target.role === 'admin') return done('Адмін бачить і керує всім');
     const v = await permsView(env, target);
     await send(env, me.chat_id, v.text, { reply_markup: { inline_keyboard: v.kb } });
     return done();
   }
   if (act === 'pc') {
-    const t = permTargets(env)[a2];
-    if (!t || target.role === 'admin') return done('Не можна');
-    const cycle = t.kind === 'site' ? SITE_PERMS : PERMS;
-    const cur = await getPerm(env, target, a2);
-    const next = cycle[(Math.max(cycle.indexOf(cur), 0) + 1) % cycle.length];
-    await setPerm(env, tid, a2, next);
+    const known = a2.startsWith('site.') ? siteTree(env).some((n) => n.key === a2) : Boolean(DEVICES[a2]);
+    if (!known || target.role === 'admin') return done('Не можна');
+    const { kind, next, options } = await nextPerm(env, target, a2);
+    if (kind === 'device' && options.length === 1) return done("Спершу відкрий доступ до об'єкта");
+    if (next === null) await clearPerm(env, tid, a2);
+    else await setPerm(env, tid, a2, next);
     const v = await permsView(env, target);
     await edit(env, cq, v.text, v.kb);
-    return done(t.kind === 'site' ? (next === 'none' ? 'Не бачить' : 'Бачить') : PERM_LABEL[next]);
+    return done(next === null ? "Як об'єкт" : LEVEL_LABEL[next]);
   }
 
   let result;
   if (act === 'a' && ROLES[a2]) {
+    const wasUser = target.status === 'approved' && target.role !== 'admin';
     await D.prepare("UPDATE users SET role=?, status='approved' WHERE chat_id=?").bind(a2, tid).run();
-    if (a2 !== 'admin') await setDefaultPerms(env, tid, a2, true);
+    // A newly approved user, or an admin demoted to user, starts from "sees the first site";
+    // an existing user keeps the access the admin already set.
+    if (a2 === 'user' && !wasUser) await resetPerms(env, tid);
     await send(env, tid, `✅ Доступ надано: ${ROLES[a2]}.`, { reply_markup: mainKeyboard(a2) });
-    const note = a2 !== 'admin' ? `${NL}Права на пристрої скинуто до типових для ролі.` : '';
-    result = `✅ ${userLabel(target)} → ${ROLES[a2]}${note}`;
+    if (a2 === 'user') {
+      const v = await permsView(env, await getUser(env, tid));
+      await edit(env, cq, `✅ ${userLabel(target)} → ${ROLES.user}${NL}${NL}${v.text}`, v.kb);
+      return done('Готово');
+    }
+    result = `✅ ${userLabel(target)} → ${ROLES[a2]}`;
   } else if (act === 'r') {
     await D.prepare("UPDATE users SET status='rejected', role=NULL WHERE chat_id=?").bind(tid).run();
     await D.prepare('DELETE FROM user_devices WHERE chat_id=?').bind(tid).run();
@@ -207,7 +248,7 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
   } else {
     return done('Невідома дія');
   }
-  await edit(env, cq, result, [[{ text: '📱 Пристрої', callback_data: `pd:${tid}` }]]);
+  await edit(env, cq, result, act === 'r' ? undefined : [[{ text: '🔐 Доступ', callback_data: `pd:${tid}` }]]);
   return done('Готово');
 }
 

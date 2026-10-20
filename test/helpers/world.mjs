@@ -141,7 +141,7 @@ export const GUEST = 3;
 
 /**
  * @param {object} [opts]
- * @param {boolean} [opts.users] seed an admin (1), a "control" member (2) and a "notify" guest (3)
+ * @param {boolean} [opts.users] seed an admin (1), a member who controls the home (2) and a guest who sees it (3)
  */
 export function createWorld({ users = true } = {}) {
   const D1 = createD1();
@@ -272,11 +272,10 @@ export function createWorld({ users = true } = {}) {
   if (users) {
     D1.sql.exec(`INSERT INTO users VALUES
       (${ADMIN},'Admin','admin','admin','approved',1),
-      (${MEMBER},'Member','member','control','approved',2),
-      (${GUEST},'Guest','guest','notify','approved',3);
-      INSERT INTO user_devices VALUES (${MEMBER},'boiler','control'),(${GUEST},'boiler','view'),
-        (${MEMBER},'site.home','view'),(${GUEST},'site.home','view');
-      INSERT INTO kv VALUES ('schema_v','3'),('grid','on'),('grid_since','${w.clock - 3 * 3600}'),('announced','${VERSION}');`);
+      (${MEMBER},'Member','member','user','approved',2),
+      (${GUEST},'Guest','guest','user','approved',3);
+      INSERT INTO user_devices VALUES (${MEMBER},'site.home','control'),(${GUEST},'site.home','view');
+      INSERT INTO kv VALUES ('schema_v','4'),('grid','on'),('grid_since','${w.clock - 3 * 3600}'),('announced','${VERSION}');`);
   }
 
   /** Switches the deployment to an inverter on DESS Monitor. */

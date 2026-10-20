@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { migrate } from '../src/db.js';
+import { getUser, migrate } from '../src/db.js';
 import { ADMIN, GUEST, MEMBER, VC_PASSWORD, VC_USER, createWorld, textsTo } from './helpers/world.mjs';
 
 /** Home on Deye (with the boiler) plus a workshop on SmartValue. */
@@ -21,15 +21,28 @@ function twoSites() {
   return w;
 }
 
-test('upgrade: users who got grid notifications keep them for the first site', async () => {
+test('upgrade to v4: old roles become levels on the first site, nobody loses access', async () => {
   const w = createWorld();
-  w.db.exec("DELETE FROM user_devices WHERE device LIKE 'site.%'; UPDATE kv SET v='2' WHERE k='schema_v'");
+  await getUser(w.env, ADMIN); // opens the database first, as a running worker would have
+  w.db.exec(`DELETE FROM user_devices; UPDATE kv SET v='2' WHERE k='schema_v';
+    UPDATE users SET role='control' WHERE chat_id=${MEMBER}; UPDATE users SET role='notify' WHERE chat_id=${GUEST};
+    INSERT INTO users VALUES (50,'Kid','kid','control','approved',4), (51,'Odd','odd','notify','approved',5);
+    INSERT INTO user_devices VALUES (${MEMBER},'boiler','control'),(${GUEST},'boiler','view'),
+      (50,'boiler','view'),(51,'boiler','control')`);
   await migrate(w.env);
-  assert.equal(
-    w.db.prepare("SELECT perm FROM user_devices WHERE chat_id=? AND device='site.home'").get(GUEST).perm,
-    'view'
-  );
-  assert.equal(w.kv('schema_v'), '3');
+  const perms = (chat) =>
+    Object.fromEntries(
+      w.db
+        .prepare('SELECT device, perm FROM user_devices WHERE chat_id=?')
+        .all(chat)
+        .map((r) => [r.device, r.perm])
+    );
+  assert.deepEqual(perms(MEMBER), { 'site.home': 'control' });
+  assert.deepEqual(perms(GUEST), { 'site.home': 'view' });
+  assert.deepEqual(perms(50), { 'site.home': 'control', boiler: 'view' }, 'a lower boiler right becomes a limit');
+  assert.deepEqual(perms(51), { 'site.home': 'control' }, 'a higher boiler right lifts the site, not lost');
+  assert.equal(w.db.prepare("SELECT count(*) n FROM users WHERE role IN ('control','notify')").get().n, 0);
+  assert.equal(w.kv('schema_v'), '4');
 });
 
 test('two sites: notifications carry the site name and go only to people who see the site', async () => {
@@ -61,22 +74,25 @@ test('two sites: status lists the sites the user sees', async () => {
 test('admin opens a site to a user in the permissions screen', async () => {
   const w = twoSites();
   const [view] = await w.press(ADMIN, `pd:${GUEST}`);
-  assert.ok(view.markup.inline_keyboard.some(([b]) => b.text === '⚡ Майстерня: 🚫 не бачить'));
-  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
-  const perm = w.db.prepare("SELECT perm FROM user_devices WHERE chat_id=? AND device='site.shop'").get(GUEST).perm;
-  assert.equal(perm, 'view');
-  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
-  assert.equal(
-    w.db.prepare("SELECT perm FROM user_devices WHERE chat_id=? AND device='site.shop'").get(GUEST).perm,
-    'none',
-    'a site toggles between seen and not seen'
+  assert.deepEqual(
+    view.markup.inline_keyboard.map(([b]) => b.text),
+    ['⚡ Дім: 👁 бачить', '      🚿 Бойлер: як Дім', '⚡ Майстерня: 🚫 немає'],
+    'devices are listed under the site they belong to'
   );
+  const shop = () =>
+    w.db.prepare("SELECT perm FROM user_devices WHERE chat_id=? AND device='site.shop'").get(GUEST).perm;
+  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
+  assert.equal(shop(), 'view');
+  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
+  assert.equal(shop(), 'control');
+  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
+  assert.equal(shop(), 'none');
 });
 
 test('new users see the first site by default, other sites only when an admin opens them', async () => {
   const w = twoSites();
   await w.say(77, '/start');
-  await w.press(ADMIN, 'a:77:notify');
+  await w.press(ADMIN, 'a:77:user');
   const rows = Object.fromEntries(
     w.db
       .prepare('SELECT device, perm FROM user_devices WHERE chat_id=77')
@@ -84,7 +100,7 @@ test('new users see the first site by default, other sites only when an admin op
       .map((r) => [r.device, r.perm])
   );
   assert.equal(rows['site.home'], 'view');
-  assert.equal(rows['site.shop'], 'none');
+  assert.equal(rows['site.shop'], undefined, 'no row means no access');
 });
 
 test('a broken second site does not stop the first', async () => {

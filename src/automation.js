@@ -62,7 +62,7 @@ export async function announce(env) {
     return;
   }
   const text = [`🆕 Бот оновлено до v${VERSION}.`, ...notes].join(NL);
-  await broadcast(env, text, 'notify', (u) => ({ reply_markup: mainKeyboard(u.role) }));
+  await broadcast(env, text, 'user', (u) => ({ reply_markup: mainKeyboard(u.role) }));
 }
 
 /* ---------- per-site state ---------- */

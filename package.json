@@ -1,6 +1,6 @@
 {
   "name": "home-bot",
-  "version": "1.4.1",
+  "version": "1.5.0",
   "description": "Telegram bot that switches a Midea water heater off during power outages, based on a Deye inverter. Runs on Cloudflare Workers.",
   "private": true,
   "type": "module",

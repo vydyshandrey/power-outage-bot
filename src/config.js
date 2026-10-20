@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.4.1';
+export const VERSION = '1.5.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -30,20 +30,24 @@ export const ERROR_REPEAT_SEC = 3600;
 export const DEFAULT_TZ = 'Europe/Kyiv';
 export const DEFAULT_DEYE_API = 'https://eu1-developer.deyecloud.com/v1.0';
 
-/** Roles, from least to most privileged. */
-export const ROLES = { admin: 'Адмін', control: 'Керування', notify: 'Сповіщення' };
-export const RANK = { notify: 1, control: 2, admin: 3 };
+/**
+ * Roles. An admin sees and controls everything and manages people; a user gets a level per site.
+ * "control" and "notify" are roles from before 1.5.0; the schema v4 migration turns them into "user".
+ */
+export const ROLES = { admin: 'Адмін', user: 'Користувач' };
+export const RANK = { user: 1, notify: 1, control: 1, admin: 3 };
 
-/** Per-device permissions; cycling order in the admin UI. */
-export const PERMS = ['none', 'view', 'control'];
-export const PERM_LABEL = { none: '🚫 немає', view: '👁 перегляд', control: '🎛 керування' };
+/**
+ * Access levels, from least to most. A site level covers the site's status, its grid
+ * notifications and, at "control", switching its devices. A device can be limited below
+ * its site's level, never raised above it.
+ */
+export const LEVELS = ['none', 'view', 'control'];
+export const LEVEL_LABEL = { none: '🚫 немає', view: '👁 бачить', control: '🎛 керує' };
 
-/** For a site, "view" means its notifications and status; there is nothing to control. */
-export const SITE_PERMS = ['none', 'view'];
-
-/** Controllable devices. New device types (sockets, ATS, TV) are added here. */
+/** Controllable devices and the site each belongs to. New device types are added here. */
 export const DEVICES = {
-  boiler: { name: 'Бойлер', icon: '🚿' },
+  boiler: { name: 'Бойлер', icon: '🚿', site: 'primary' },
 };
 
 /**
@@ -77,20 +81,28 @@ export function sitesOf(env) {
   });
 }
 
-/** Permission key of a site: who sees its grid notifications and status. */
+/** Permission key of a site. */
 export const siteKey = (site) => `site.${site.id}`;
 
 /**
- * Everything a permission can be set on: configured devices, then sites.
+ * Sites with the configured devices that belong to them: the structure of the permissions screen.
  * @param {Env} env
- * @returns {Record<string, {name: string, icon: string, kind: 'device' | 'site', site?: Site}>}
+ * @returns {Array<{site: Site, key: string, devices: string[]}>}
  */
-export function permTargets(env) {
-  const out = {};
-  for (const [k, v] of Object.entries(DEVICES)) if (deviceConfigured(env, k)) out[k] = { ...v, kind: 'device' };
-  for (const site of sitesOf(env)) out[siteKey(site)] = { name: site.name, icon: '⚡', kind: 'site', site };
-  return out;
+export function siteTree(env) {
+  const sites = sitesOf(env);
+  return sites.map((site) => ({
+    site,
+    key: siteKey(site),
+    devices: Object.keys(DEVICES).filter(
+      (dev) =>
+        deviceConfigured(env, dev) && (DEVICES[dev].site === 'primary' ? site.primary : DEVICES[dev].site === site.id)
+    ),
+  }));
 }
+
+/** The site a device belongs to. @returns {Site} */
+export const deviceSite = (env, dev) => siteTree(env).find((n) => n.devices.includes(dev))?.site || sitesOf(env)[0];
 
 /**
  * @typedef {object} Env

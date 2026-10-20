@@ -49,7 +49,7 @@ export function edit(env, callbackQuery, text, inlineKeyboard) {
 }
 
 /** Sends to every approved user with at least `minRole`. One failure does not stop the rest. */
-export async function broadcast(env, text, minRole = 'notify', extra) {
+export async function broadcast(env, text, minRole = 'user', extra) {
   for (const u of await usersBy(env, minRole)) {
     try {
       await send(env, u.chat_id, text, typeof extra === 'function' ? extra(u) : extra);
@@ -59,9 +59,9 @@ export async function broadcast(env, text, minRole = 'notify', extra) {
   }
 }
 
-/** Sends a device notification to everyone who can at least view that device. */
+/** Sends a site or device notification to everyone who can at least see it. */
 export async function broadcastDevice(env, dev, text) {
-  for (const u of await usersBy(env, 'notify')) {
+  for (const u of await usersBy(env, 'user')) {
     if ((await getPerm(env, u, dev)) === 'none') continue;
     try {
       await send(env, u.chat_id, text);
