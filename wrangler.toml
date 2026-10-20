@@ -24,6 +24,12 @@ enabled = true
 # Пристрої. Спочатку можна лишити порожніми, розгорнути й відкрити /discover?key=<ACCESS_KEY>
 [vars]
 INVERTER = "deye"                 # deye — Deye; dess — SmartESS, WatchPower; valueclouds — SmartValue
+# Кілька об'єктів (дім, майстерня, дача) в одному боті — замість INVERTER.
+# Перший об'єкт керує бойлером; хто бачить який об'єкт, адмін налаштовує в «👥 Користувачі».
+# SITES = [
+#   { id = "home", name = "Дім", inverter = "deye" },
+#   { id = "shop", name = "Майстерня", inverter = "valueclouds" },
+# ]
 DEYE_SN = ""                      # серійний номер інвертора Deye
 # Для INVERTER = "dess" — значення з /discover:
 # DESS_PN = ""

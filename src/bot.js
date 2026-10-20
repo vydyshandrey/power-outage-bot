@@ -5,12 +5,15 @@
  * (admin, control, notify) and may fine-tune per-device permissions.
  * The very first /start with ACCESS_KEY creates the first admin.
  *
+ * Permissions are set per device and per site (⚡): a site permission decides who sees its
+ * status and grid notifications.
+ *
  * Callback data: g:<days> outages · dl device list · d:<dev> card · h:<dev> history ·
  * dc:<dev>:on|off control · pd:<uid> perms view · pc:<uid>:<dev> cycle perm ·
  * a:<uid>:<role> approve · r:<uid> reject or revoke.
  */
 
-import { DEVICES, PERMS, PERM_LABEL, ROLES } from './config.js';
+import { DEVICES, PERMS, PERM_LABEL, ROLES, SITE_PERMS, permTargets } from './config.js';
 import { db, getPerm, getUser, kvSet, setDefaultPerms, setPerm, usersBy } from './db.js';
 import { boilerPower } from './midea.js';
 import { deviceCard, deviceHistory, devicesMenu, outagesReport, statusText } from './reports.js';
@@ -29,17 +32,13 @@ const roleButtons = (uid) => [
 
 async function permsView(env, target) {
   const kb = [];
-  for (const dev of Object.keys(DEVICES)) {
+  for (const [dev, t] of Object.entries(permTargets(env))) {
     const p = await getPerm(env, target, dev);
-    kb.push([
-      {
-        text: `${DEVICES[dev].icon} ${DEVICES[dev].name}: ${PERM_LABEL[p]}`,
-        callback_data: `pc:${target.chat_id}:${dev}`,
-      },
-    ]);
+    const label = t.kind === 'site' ? (p === 'none' ? '🚫 не бачить' : '👁 бачить статус') : PERM_LABEL[p];
+    kb.push([{ text: `${t.icon} ${t.name}: ${label}`, callback_data: `pc:${target.chat_id}:${dev}` }]);
   }
   return {
-    text: `📱 Права на пристрої: ${userLabel(target)}${NL}Натискай, щоб змінити: немає → перегляд → керування.`,
+    text: `📱 Права: ${userLabel(target)}${NL}Натискай, щоб змінити. Пристрої: немає → перегляд → керування. Об'єкти (⚡): хто бачить статус і отримує сповіщення про світло.`,
     kb,
   };
 }
@@ -182,13 +181,15 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
     return done();
   }
   if (act === 'pc') {
-    if (!DEVICES[a2] || target.role === 'admin') return done('Не можна');
+    const t = permTargets(env)[a2];
+    if (!t || target.role === 'admin') return done('Не можна');
+    const cycle = t.kind === 'site' ? SITE_PERMS : PERMS;
     const cur = await getPerm(env, target, a2);
-    const next = PERMS[(PERMS.indexOf(cur) + 1) % PERMS.length];
+    const next = cycle[(Math.max(cycle.indexOf(cur), 0) + 1) % cycle.length];
     await setPerm(env, tid, a2, next);
     const v = await permsView(env, target);
     await edit(env, cq, v.text, v.kb);
-    return done(PERM_LABEL[next]);
+    return done(t.kind === 'site' ? (next === 'none' ? 'Не бачить' : 'Бачить') : PERM_LABEL[next]);
   }
 
   let result;
@@ -218,7 +219,7 @@ export async function onCallback(env, cq) {
   const [act, a1, a2] = String(cq.data || '').split(':');
 
   if (act === 'g') {
-    await send(env, me.chat_id, await outagesReport(env, Number(a1) || 7));
+    await send(env, me.chat_id, await outagesReport(env, me, Number(a1) || 7));
     return done();
   }
   if (act === 'dl') {

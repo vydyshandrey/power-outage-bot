@@ -1,19 +1,36 @@
 /** Read-only views shown in the bot: status, device card, history, outage report, device menu. */
 
-import { DEVICES } from './config.js';
-import { db, getPerm, kvGet, viewableDevices } from './db.js';
-import { inverterLatest, inverterName } from './inverter.js';
+import { DEVICES, sitesOf } from './config.js';
+import { db, getPerm, kvGet, viewableDevices, viewableSites } from './db.js';
+import { gridDevice } from './automation.js';
+import { inverterConfigured, inverterLatest, inverterName } from './inverter.js';
 import { Midea } from './midea.js';
 import { NL, esc, fmtDur, fmtHM, fmtTime, now } from './util.js';
 
-/** "📊 Статус": grid, consumption, battery and one line per visible device. */
+/** Storage key of a site's state; mirrors automation.js. */
+const K = (site, k) => (site.primary ? k : `${k}@${site.id}`);
+
+/** "📊 Статус": per visible site grid, consumption and battery, then one line per visible device. */
 export async function statusText(env, user) {
+  const sites = await viewableSites(env, user);
+  const titled = sitesOf(env).length > 1;
+  const lines = [];
+  for (const site of sites) {
+    if (titled) lines.push(`${lines.length ? NL : ''}<b>⚡ ${esc(site.name)}</b>`);
+    lines.push(...(await siteLines(env, site)));
+  }
+  for (const dev of await viewableDevices(env, user)) lines.push(await deviceLine(env, dev));
+  return lines.join(NL) || "Доступних об'єктів і пристроїв немає. Попроси адміністратора надати доступ.";
+}
+
+async function siteLines(env, site) {
+  if (!inverterConfigured(env, site)) return ['Інвертор ще не налаштовано.'];
   const lines = [];
   try {
-    const d = await inverterLatest(env);
+    const d = await inverterLatest(env, site);
     // If the tick has not recorded a fresh transition yet, count from the reading itself.
-    const stored = await kvGet(env, 'grid');
-    const since = stored === (d.grid ? 'on' : 'off') ? Number(await kvGet(env, 'grid_since')) || null : d.ts;
+    const stored = await kvGet(env, K(site, 'grid'));
+    const since = stored === (d.grid ? 'on' : 'off') ? Number(await kvGet(env, K(site, 'grid_since'))) || null : d.ts;
     const dur = since ? ` ${fmtDur(now() - since)} (з ${fmtTime(since)})` : '';
     if (d.grid) {
       lines.push(`💡 Світло є${dur}, ${d.volt} В`);
@@ -23,12 +40,11 @@ export async function statusText(env, user) {
       lines.push(`🔌 Світла немає${dur}`);
       lines.push(`🔋 Від інвертора: споживання ${d.load} Вт, батарея ${d.soc}% (${Math.abs(d.batt)} Вт)`);
     }
-    lines.push(`🕒 Дані ${inverterName(env)}: ${fmtDur(now() - d.ts)} тому`);
+    lines.push(`🕒 Дані ${inverterName(site)}: ${fmtDur(now() - d.ts)} тому`);
   } catch (e) {
     lines.push(`Інвертор: помилка (${esc(e.message)})`);
   }
-  for (const dev of await viewableDevices(env, user)) lines.push(await deviceLine(env, dev));
-  return lines.join(NL);
+  return lines;
 }
 
 async function deviceLine(env, dev) {
@@ -103,14 +119,22 @@ export async function deviceHistory(env, dev) {
   return { text: lines.join(NL), kb: [[{ text: '⬅️ Назад', callback_data: `d:${dev}` }]] };
 }
 
-/** Outages over the last `days`, paired from grid_off/grid_on events, with the total. */
-export async function outagesReport(env, days = 7) {
+/** Outages over the last `days` at every site the user sees. */
+export async function outagesReport(env, user, days = 7) {
+  const titled = sitesOf(env).length > 1;
+  const parts = [];
+  for (const site of await viewableSites(env, user)) parts.push(await siteOutages(env, site, days, titled));
+  return parts.join(NL + NL) || "Немає доступних об'єктів.";
+}
+
+/** Outages of one site, paired from grid_off/grid_on events, with the total. */
+async function siteOutages(env, site, days, titled) {
   const from = now() - days * 86400;
   const { results } = await (
     await db(env)
   )
-    .prepare("SELECT ts,type,data FROM events WHERE device='grid' AND ts>=? ORDER BY ts")
-    .bind(from)
+    .prepare('SELECT ts,type,data FROM events WHERE device=? AND ts>=? ORDER BY ts')
+    .bind(gridDevice(site), from)
     .all();
 
   const rows = [];
@@ -125,7 +149,7 @@ export async function outagesReport(env, days = 7) {
   }
   if (start) rows.push([start, null]);
 
-  const lines = [`<b>🔌 Відключення за ${days} днів</b>`];
+  const lines = [`<b>🔌 ${titled ? `${esc(site.name)}: в` : 'В'}ідключення за ${days} днів</b>`];
   if (!rows.length) lines.push('Відключень не було (або історія ще порожня).');
   let total = 0;
   for (const [a, b] of rows) {

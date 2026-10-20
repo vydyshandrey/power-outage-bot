@@ -57,14 +57,14 @@ test('SmartValue down for 10+ min: alert names the platform', async () => {
 test('/discover with SmartValue finds devcode and devaddr for the given PN and SN', async () => {
   const w = createWorld().useValueClouds({ devcode: false });
   const body = await (await w.http(`/discover?key=${ACCESS_KEY}`)).json();
-  assert.equal(body.inverter.VC_DEVCODE, '6409');
-  assert.equal(body.inverter.VC_DEVADDR, '255');
-  assert.equal(body.inverter.sample.soc, 77);
+  assert.equal(body.sites.home.found.VC_DEVCODE, '6409');
+  assert.equal(body.sites.home.found.VC_DEVADDR, '255');
+  assert.equal(body.sites.home.found.sample.soc, 77);
 });
 
 test('/discover with a wrong SmartValue password shows the platform message', async () => {
   const w = createWorld().useValueClouds();
   w.env.VC_PASSWORD = 'wrong';
   const body = await (await w.http(`/discover?key=${ACCESS_KEY}`)).json();
-  assert.match(body.inverter.error, /account or password error/);
+  assert.match(body.sites.home.error, /account or password error/);
 });

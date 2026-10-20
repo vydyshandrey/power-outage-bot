@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.3.0';
+export const VERSION = '1.4.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -38,7 +38,10 @@ export const RANK = { notify: 1, control: 2, admin: 3 };
 export const PERMS = ['none', 'view', 'control'];
 export const PERM_LABEL = { none: '🚫 немає', view: '👁 перегляд', control: '🎛 керування' };
 
-/** Device registry. New device types (sockets, ATS, TV) are added here. */
+/** For a site, "view" means its notifications and status; there is nothing to control. */
+export const SITE_PERMS = ['none', 'view'];
+
+/** Controllable devices. New device types (sockets, ATS, TV) are added here. */
 export const DEVICES = {
   boiler: { name: 'Бойлер', icon: '🚿' },
 };
@@ -51,6 +54,45 @@ export const DEVICES = {
 export const deviceConfigured = (env, dev) => (dev === 'boiler' ? Boolean(env.MIDEA_DEVICE_ID) : true);
 
 /**
+ * @typedef {object} Site
+ * @property {string} id short latin id, part of storage keys; never rename it
+ * @property {string} name shown in messages
+ * @property {string} inverter which cloud its inverter reports to (see inverter.js)
+ * @property {boolean} primary the first site: keeps the historical storage keys, owns the boiler
+ */
+
+/**
+ * Sites (homes, workshops) with their inverters, from the SITES variable.
+ * Without SITES there is one site, "Дім", with the inverter from INVERTER.
+ * @param {Env} env
+ * @returns {Site[]}
+ */
+export function sitesOf(env) {
+  let list = env.SITES;
+  if (typeof list === 'string') list = list.trim() ? JSON.parse(list) : null;
+  if (!Array.isArray(list) || !list.length) list = [{ id: 'home', name: 'Дім', inverter: env.INVERTER || 'deye' }];
+  return list.map((x, i) => {
+    if (!/^[a-z0-9_-]+$/i.test(String(x.id))) throw new Error(`SITES: id «${x.id}» має бути латиницею без пробілів`);
+    return { id: String(x.id), name: String(x.name || x.id), inverter: String(x.inverter || 'deye'), primary: i === 0 };
+  });
+}
+
+/** Permission key of a site: who sees its grid notifications and status. */
+export const siteKey = (site) => `site.${site.id}`;
+
+/**
+ * Everything a permission can be set on: configured devices, then sites.
+ * @param {Env} env
+ * @returns {Record<string, {name: string, icon: string, kind: 'device' | 'site', site?: Site}>}
+ */
+export function permTargets(env) {
+  const out = {};
+  for (const [k, v] of Object.entries(DEVICES)) if (deviceConfigured(env, k)) out[k] = { ...v, kind: 'device' };
+  for (const site of sitesOf(env)) out[siteKey(site)] = { name: site.name, icon: '⚡', kind: 'site', site };
+  return out;
+}
+
+/**
  * @typedef {object} Env
  * @property {D1Database} DB
  * @property {string} TG_BOT_TOKEN
@@ -58,7 +100,8 @@ export const deviceConfigured = (env, dev) => (dev === 'boiler' ? Boolean(env.MI
  * @property {string} [NOTIFY_KEY]
  * @property {string} [NOTIFY_NAME]
  * @property {string} [TICK_KEY]
- * @property {'deye'|'dess'|'valueclouds'} [INVERTER] which cloud the inverter reports to; default deye
+ * @property {'deye'|'dess'|'valueclouds'} [INVERTER] inverter cloud when there is one site; default deye
+ * @property {string|Array<{id: string, name: string, inverter: string}>} [SITES] several sites, see sitesOf
  * @property {string} [DEYE_APP_ID]
  * @property {string} [DEYE_APP_SECRET]
  * @property {string} [DEYE_EMAIL]

@@ -3,7 +3,7 @@
  * The schema is created lazily on first use, so a fresh database needs no setup.
  */
 
-import { DEVICES, RANK, deviceConfigured } from './config.js';
+import { RANK, permTargets, siteKey, sitesOf } from './config.js';
 import { now } from './util.js';
 
 /** Exported for tests, which start from an empty in-memory database. */
@@ -31,14 +31,23 @@ export async function db(env) {
   return env.DB;
 }
 
-/** v1.1.0 introduced per-device permissions: give existing users defaults for their role. */
-async function migrate(env) {
+/**
+ * v2 (1.1.0): per-device permissions — existing users get their role defaults.
+ * v3 (1.4.0): sites — everyone who got grid notifications keeps getting them for the first site.
+ */
+export async function migrate(env) {
   const D = env.DB;
-  const v = await D.prepare("SELECT v FROM kv WHERE k='schema_v'").first();
-  if (v && Number(v.v) >= 2) return;
+  const row = await D.prepare("SELECT v FROM kv WHERE k='schema_v'").first();
+  const v = Number(row?.v) || 0;
+  if (v >= 3) return;
   const { results } = await D.prepare("SELECT * FROM users WHERE status='approved' AND role != 'admin'").all();
-  for (const u of results) await setDefaultPerms(env, u.chat_id, u.role, false);
-  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','2') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+  for (const u of results) {
+    if (v < 2) await setDefaultPerms(env, u.chat_id, u.role, false);
+    await D.prepare('INSERT OR IGNORE INTO user_devices (chat_id,device,perm) VALUES (?,?,?)')
+      .bind(u.chat_id, siteKey(sitesOf(env)[0]), 'view')
+      .run();
+  }
+  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','3') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
 }
 
 /* ---------- key-value state ---------- */
@@ -97,12 +106,13 @@ export async function setPerm(env, chatId, dev, perm) {
 }
 
 /**
- * Role defaults: "control" may operate devices, others may view them.
+ * Role defaults: "control" may operate devices, others may view them. Of the sites only the
+ * first is visible by default; an admin opens the others to the people who need them.
  * @param {boolean} overwrite false keeps permissions that were set explicitly
  */
 export async function setDefaultPerms(env, chatId, role, overwrite = true) {
-  const perm = role === 'control' ? 'control' : 'view';
-  for (const dev of Object.keys(DEVICES)) {
+  for (const [dev, t] of Object.entries(permTargets(env))) {
+    const perm = t.kind === 'site' ? (t.site.primary ? 'view' : 'none') : role === 'control' ? 'control' : 'view';
     if (!overwrite) {
       const r = await env.DB.prepare('SELECT perm FROM user_devices WHERE chat_id=? AND device=?')
         .bind(chatId, dev)
@@ -113,12 +123,19 @@ export async function setDefaultPerms(env, chatId, role, overwrite = true) {
   }
 }
 
-/** Configured devices the user may at least view. */
+/** Configured devices (not sites) the user may at least view. */
 export async function viewableDevices(env, user) {
   const out = [];
-  for (const dev of Object.keys(DEVICES)) {
-    if (deviceConfigured(env, dev) && (await getPerm(env, user, dev)) !== 'none') out.push(dev);
+  for (const [dev, t] of Object.entries(permTargets(env))) {
+    if (t.kind === 'device' && (await getPerm(env, user, dev)) !== 'none') out.push(dev);
   }
+  return out;
+}
+
+/** Sites whose status and notifications the user may see. */
+export async function viewableSites(env, user) {
+  const out = [];
+  for (const site of sitesOf(env)) if ((await getPerm(env, user, siteKey(site))) !== 'none') out.push(site);
   return out;
 }
 

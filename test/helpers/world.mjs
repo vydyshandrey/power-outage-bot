@@ -274,8 +274,9 @@ export function createWorld({ users = true } = {}) {
       (${ADMIN},'Admin','admin','admin','approved',1),
       (${MEMBER},'Member','member','control','approved',2),
       (${GUEST},'Guest','guest','notify','approved',3);
-      INSERT INTO user_devices VALUES (${MEMBER},'boiler','control'),(${GUEST},'boiler','view');
-      INSERT INTO kv VALUES ('schema_v','2'),('grid','on'),('grid_since','${w.clock - 3 * 3600}'),('announced','${VERSION}');`);
+      INSERT INTO user_devices VALUES (${MEMBER},'boiler','control'),(${GUEST},'boiler','view'),
+        (${MEMBER},'site.home','view'),(${GUEST},'site.home','view');
+      INSERT INTO kv VALUES ('schema_v','3'),('grid','on'),('grid_since','${w.clock - 3 * 3600}'),('announced','${VERSION}');`);
   }
 
   /** Switches the deployment to an inverter on DESS Monitor. */

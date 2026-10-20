@@ -1,6 +1,6 @@
 /**
  * Inverter facade: the rest of the bot reads the grid through here and does not
- * care which cloud the inverter reports to. Chosen by the INVERTER variable.
+ * care which cloud an inverter reports to. Each site names its cloud (see sitesOf).
  *
  *   deye — Deye Cloud OpenAPI (default)
  *   dess — DESS Monitor / ShineMonitor (SmartESS, WatchPower and rebranded apps)
@@ -39,22 +39,21 @@ const PROVIDERS = {
   },
 };
 
-/** @param {import('./config.js').Env} env */
-function provider(env) {
-  const key = env.INVERTER || 'deye';
-  const p = PROVIDERS[key];
-  if (!p) throw new Error(`INVERTER має бути ${Object.keys(PROVIDERS).join(' або ')}, а не «${key}»`);
+/** @param {import('./config.js').Site} site */
+function provider(site) {
+  const p = PROVIDERS[site.inverter];
+  if (!p) throw new Error(`Інвертор «${site.inverter}»: має бути ${Object.keys(PROVIDERS).join(', ')}`);
   return p;
 }
 
 /** Name used in messages, e.g. "Deye не відповідає". */
-export const inverterName = (env) => provider(env).name;
+export const inverterName = (site) => provider(site).name;
 
-/** True once the device IDs from /discover are in wrangler.toml. */
-export const inverterConfigured = (env) => provider(env).configured(env);
+/** True once the device IDs for this site's cloud are in wrangler.toml. */
+export const inverterConfigured = (env, site) => provider(site).configured(env);
 
 /** @returns {Promise<import('./deye.js').Reading>} */
-export const inverterLatest = (env) => provider(env).latest(env);
+export const inverterLatest = (env, site) => provider(site).latest(env);
 
-/** Devices visible to the configured account, for /discover. */
-export const inverterDiscover = (env) => provider(env).discover(env);
+/** Devices visible to the site's account, for /discover. */
+export const inverterDiscover = (env, site) => provider(site).discover(env);

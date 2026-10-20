@@ -99,7 +99,7 @@ test('DESS data that stops changing is reported as stale', async () => {
 test('/discover with DESS lists the values for wrangler.toml', async () => {
   const w = createWorld().useDess();
   const body = await (await w.http(`/discover?key=${ACCESS_KEY}`)).json();
-  assert.deepEqual(body.inverter[0], {
+  assert.deepEqual(body.sites.home.found[0], {
     plant: 'Майстерня',
     devices: [
       { DESS_PN: 'W0012345678901', DESS_SN: '96342210100001', DESS_DEVCODE: '2451', DESS_DEVADDR: '1', alias: 'PV18' },
@@ -111,5 +111,5 @@ test('DESS with a wrong password reports the platform error', async () => {
   const w = createWorld().useDess();
   w.env.DESS_PASSWORD = 'wrong';
   const body = await (await w.http(`/discover?key=${ACCESS_KEY}`)).json();
-  assert.match(body.inverter.error, /ERR_PASSWORD_VERIF_FAIL/);
+  assert.match(body.sites.home.error, /ERR_PASSWORD_VERIF_FAIL/);
 });
