@@ -6,26 +6,21 @@
  * may be limited below its site's level. The very first /start with ACCESS_KEY creates the first admin.
  *
  * Callback data: g:<days> outages · dl device list · d:<dev> card · h:<dev> history ·
- * dc:<dev>:on|off control · pd:<uid> access screen · pc:<uid>:<site.id|dev> next level ·
- * a:<uid>:<role> approve · r:<uid> reject or revoke.
+ * dc:<dev>:on|off control · a:<uid>:<role> approve or change role · r:<uid> reject or revoke ·
+ * u:… people and access (access.js) · s:… settings (settings.js).
  */
 
-import { LEVELS, LEVEL_LABEL, ROLES, controllable, deviceById, deviceSite, siteKey, siteTree } from './config.js';
-import { clearPerm, db, deviceLimit, getPerm, getUser, kvSet, resetPerms, setPerm, usersBy } from './db.js';
+import { ROLES, controllable, deviceById, deviceSite } from './config.js';
+import { db, getPerm, getUser, kvSet, resetPerms, usersBy } from './db.js';
 import { DK, setDevicePower } from './devices.js';
 import { render } from './messages.js';
+import { onAccessCallback, onAccessText, openUserEditor, userCard, userLabel, usersList } from './access.js';
 import { onSettingsCallback, onSettingsText, openSettings } from './settings.js';
 import { displayName } from './store.js';
 import { startUpdate } from './updates.js';
 import { deviceCard, deviceHistory, devicesMenu, outagesReport, statusText } from './reports.js';
 import { broadcastDevice, edit, mainKeyboard, send, tg } from './telegram.js';
-import { NL, esc, now } from './util.js';
-
-/** Keeps a name written right-to-left (Arabic, Hebrew) from scrambling the rest of the line. */
-const isolate = (text) => `\u2068${text}\u2069`;
-
-const userLabel = (u) =>
-  `${isolate(esc(displayName(u)))}${u.alias && u.name ? ` (${isolate(esc(u.name))})` : ''}${u.username ? ` @${esc(u.username)}` : ''} (<code>${u.chat_id}</code>)`;
+import { NL, now } from './util.js';
 
 const roleButtons = (uid) => [
   [
@@ -33,55 +28,6 @@ const roleButtons = (uid) => [
     { text: '👑 Адмін', callback_data: `a:${uid}:admin` },
   ],
 ];
-
-/** "Дім: 🎛 керує · Майстерня: 🚫 немає" */
-async function accessSummary(env, u) {
-  if (u.role === 'admin') return 'Адмін: бачить і керує всім';
-  const parts = [];
-  for (const { site, key } of siteTree(env))
-    parts.push(`${esc(site.name)}: ${LEVEL_LABEL[await getPerm(env, u, key)]}`);
-  return parts.join(' · ');
-}
-
-/**
- * Permissions screen: each site with its level, its devices indented under it.
- * A device either follows its site or is limited below it.
- */
-async function permsView(env, target) {
-  const kb = [];
-  for (const { site, key, devices } of siteTree(env)) {
-    const level = await getPerm(env, target, key);
-    kb.push([{ text: `⚡ ${site.name}: ${LEVEL_LABEL[level]}`, callback_data: `pc:${target.chat_id}:${key}` }]);
-    for (const dev of devices) {
-      const limit = await deviceLimit(env, target, dev);
-      const label = limit ? LEVEL_LABEL[await getPerm(env, target, dev)] : `як ${site.name}`;
-      const { icon, name } = deviceById(env, dev);
-      kb.push([{ text: `      ${icon} ${name}: ${label}`, callback_data: `pc:${target.chat_id}:${dev}` }]);
-    }
-  }
-  return {
-    text: [
-      `🔐 Доступ: ${userLabel(target)}`,
-      '',
-      "⚡ Об'єкт: 🚫 немає → 👁 бачить (статус і сповіщення про світло) → 🎛 керує (ще й вмикає пристрої).",
-      "Пристрій під об'єктом за замовчуванням має той самий доступ; можна обмежити, але не розширити.",
-    ].join(NL),
-    kb,
-  };
-}
-
-/** Next value when an admin taps a line in the permissions screen. */
-async function nextPerm(env, target, key) {
-  if (key.startsWith('site.')) {
-    const cur = await getPerm(env, target, key);
-    return { kind: 'site', next: LEVELS[(LEVELS.indexOf(cur) + 1) % LEVELS.length] };
-  }
-  // Device: follows the site → each level below the site's → back to following the site.
-  const siteLevel = await getPerm(env, target, siteKey(deviceSite(env, key)));
-  const options = [null, ...LEVELS.slice(0, LEVELS.indexOf(siteLevel)).reverse()];
-  const limit = await deviceLimit(env, target, key);
-  return { kind: 'device', next: options[(options.indexOf(limit) + 1) % options.length], options };
-}
 
 /* ---------- messages ---------- */
 
@@ -123,31 +69,6 @@ async function handleStart(env, msg, user) {
   return send(env, id, 'Запит на доступ надіслано адміністратору.');
 }
 
-async function listUsers(env, adminId) {
-  const { results } = await (
-    await db(env)
-  )
-    .prepare("SELECT * FROM users WHERE status IN ('approved','pending') ORDER BY created")
-    .all();
-  if (!results.length) return send(env, adminId, 'Користувачів немає.');
-  for (const x of results) {
-    const kb =
-      x.chat_id === adminId
-        ? undefined
-        : {
-            inline_keyboard: [
-              ...roleButtons(x.chat_id),
-              [
-                { text: '🔐 Доступ', callback_data: `pd:${x.chat_id}` },
-                { text: '🗑 Прибрати', callback_data: `r:${x.chat_id}` },
-              ],
-            ],
-          };
-    const state = x.status === 'pending' ? '⏳ очікує' : await accessSummary(env, x);
-    await send(env, adminId, `${userLabel(x)}${NL}${state}`, kb ? { reply_markup: kb } : {});
-  }
-}
-
 /** @param {import('./config.js').Env} env */
 export async function onMessage(env, msg) {
   if (msg.chat?.type !== 'private') return;
@@ -171,8 +92,12 @@ export async function onMessage(env, msg) {
     // Buttons from v1.0.0 that may still be on someone's keyboard.
     return send(env, id, 'Керування бойлером переїхало в «🏠 Пристрої».', { reply_markup: mainKeyboard(user.role) });
   }
-  if ((text === '/users' || text === '👥 Користувачі') && user.role === 'admin') return listUsers(env, id);
+  if ((text === '/users' || text === '👥 Користувачі') && user.role === 'admin') {
+    const m = await usersList(env);
+    return send(env, id, m.text, m.kb.length ? { reply_markup: { inline_keyboard: m.kb } } : {});
+  }
   if ((text === '/settings' || text === '⚙️ Налаштування') && user.role === 'admin') return openSettings(env, id);
+  if (await onAccessText(env, msg, user)) return;
   if (await onSettingsText(env, msg, user)) return;
 
   const menu = `Меню внизу: 📊 Статус, 🏠 Пристрої${user.role === 'admin' ? ', 👥 Користувачі, ⚙️ Налаштування' : ''}.`;
@@ -220,22 +145,12 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
   if (!target) return done('Користувача не знайдено');
   const D = await db(env);
 
-  if (act === 'pd') {
+  // Access screens from older messages open today's editor.
+  if (act === 'pd' || act === 'pc') {
     if (target.role === 'admin') return done('Адмін бачить і керує всім');
-    const v = await permsView(env, target);
-    await send(env, me.chat_id, v.text, { reply_markup: { inline_keyboard: v.kb } });
-    return done();
-  }
-  if (act === 'pc') {
-    const known = a2.startsWith('site.') ? siteTree(env).some((n) => n.key === a2) : Boolean(deviceById(env, a2));
-    if (!known || target.role === 'admin') return done('Не можна');
-    const { kind, next, options } = await nextPerm(env, target, a2);
-    if (kind === 'device' && options.length === 1) return done("Спершу відкрий доступ до об'єкта");
-    if (next === null) await clearPerm(env, tid, a2);
-    else await setPerm(env, tid, a2, next);
-    const v = await permsView(env, target);
+    const v = await openUserEditor(env, me.chat_id, tid);
     await edit(env, cq, v.text, v.kb);
-    return done(next === null ? "Як об'єкт" : LEVEL_LABEL[next]);
+    return done();
   }
 
   let result;
@@ -246,12 +161,14 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
     // an existing user keeps the access the admin already set.
     if (a2 === 'user' && !wasUser) await resetPerms(env, tid);
     await send(env, tid, `✅ Доступ надано: ${ROLES[a2]}.`, { reply_markup: mainKeyboard(a2) });
-    if (a2 === 'user') {
-      const v = await permsView(env, await getUser(env, tid));
+    if (a2 === 'user' && !wasUser) {
+      const v = await openUserEditor(env, me.chat_id, tid);
       await edit(env, cq, `✅ ${userLabel(target)} → ${ROLES.user}${NL}${NL}${v.text}`, v.kb);
       return done('Готово');
     }
-    result = `✅ ${userLabel(target)} → ${ROLES[a2]}`;
+    const card = await userCard(env, me, await getUser(env, tid));
+    await edit(env, cq, `✅ ${ROLES[a2]}.${NL}${NL}${card.text}`, card.kb);
+    return done('Готово');
   } else if (act === 'r') {
     await D.prepare("UPDATE users SET status='rejected', role=NULL WHERE chat_id=?").bind(tid).run();
     await D.prepare('DELETE FROM user_devices WHERE chat_id=?').bind(tid).run();
@@ -260,7 +177,7 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
   } else {
     return done('Невідома дія');
   }
-  await edit(env, cq, result, act === 'r' ? undefined : [[{ text: '🔐 Доступ', callback_data: `pd:${tid}` }]]);
+  await edit(env, cq, result, [[{ text: '⬅️ Користувачі', callback_data: 'u:l' }]]);
   return done('Готово');
 }
 
@@ -281,6 +198,7 @@ export async function onCallback(env, cq) {
     return done();
   }
   if (act === 'd' || act === 'h' || act === 'dc') return handleDevice(env, cq, me, act, a1, a2, done);
+  if (act === 'u') return onAccessCallback(env, cq, me, String(cq.data).split(':').slice(1), done);
   if (act === 's') return onSettingsCallback(env, cq, me, String(cq.data).split(':').slice(1), done);
   if (act === 'up') {
     if (me.role !== 'admin') return done('Лише для адміна');

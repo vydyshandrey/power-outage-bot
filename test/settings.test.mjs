@@ -286,7 +286,7 @@ test('an inverter is not a switch: no automation, no control buttons, not in the
   const view = await w.press(MEMBER, `d:${inv.id}`);
   assert.match(view[0].text, /Батарея/);
   assert.ok(!buttons(view).some((b) => b.callback_data.startsWith('dc:')));
-  const access = await w.press(ADMIN, `pd:${MEMBER}`);
+  const access = await w.press(ADMIN, `u:e:${MEMBER}`);
   assert.ok(
     buttons(access).some((b) => b.callback_data.includes('boiler')),
     'screen shown'

@@ -6,6 +6,7 @@
  * text, an inverter number) the expected input is kept in kv "await:<chat id>".
  */
 
+import { userCard } from './access.js';
 import { CATEGORIES, DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
 import { db, kvGet, kvSet } from './db.js';
 import { listDevices, missingDeviceSecrets } from './devices.js';
@@ -16,7 +17,6 @@ import {
   addSite,
   deleteDevice,
   deleteSite,
-  displayName,
   setAlias,
   setSetting,
   setTemplate,
@@ -70,7 +70,6 @@ function mainMenu() {
       [{ text: "🏠 Об'єкти", callback_data: 's:sl' }],
       [{ text: '🔌 Пристрої', callback_data: 's:dl' }],
       [{ text: '✉️ Повідомлення', callback_data: 's:tl' }],
-      [{ text: '👤 Імена людей', callback_data: 's:ul' }],
       [
         { text: '🕒 Часовий пояс', callback_data: 's:tz' },
         { text: '🔗 Репозиторій', callback_data: 's:rp' },
@@ -120,6 +119,7 @@ function siteCard(env, id) {
     ],
   ];
   if (invertersOf(env, id).length > 1) kb.push([{ text: '⚡ Звідки брати світло', callback_data: `s:si:${id}` }]);
+  kb.push([{ text: '👥 Доступ людей', callback_data: `u:k:site.${id}` }]);
   kb.push([{ text: '🗑 Видалити', callback_data: `s:sd:${id}` }], back('s:sl'));
   return { text: lines.join(NL), kb };
 }
@@ -208,10 +208,13 @@ function deviceCardSettings(env, id) {
     kb.push([{ text: "📍 Об'єкт", callback_data: `s:ds:${id}` }]);
   } else {
     lines.push(`Автоматика: ${d.auto ? 'вимикати, коли зникає світло' : 'не чіпати'}`);
-    kb.push([
-      { text: "📍 Об'єкт", callback_data: `s:ds:${id}` },
-      { text: d.auto ? '🤖 Автоматика: так' : '🤖 Автоматика: ні', callback_data: `s:dA:${id}` },
-    ]);
+    kb.push(
+      [
+        { text: "📍 Об'єкт", callback_data: `s:ds:${id}` },
+        { text: d.auto ? '🤖 Автоматика: так' : '🤖 Автоматика: ні', callback_data: `s:dA:${id}` },
+      ],
+      [{ text: '👥 Доступ людей', callback_data: `u:k:${id}` }]
+    );
   }
   kb.push([{ text: '🗑 Видалити', callback_data: `s:dd:${id}` }], back('s:dl'));
   return { text: lines.join(NL), kb };
@@ -245,25 +248,6 @@ function templateCard(env, key) {
       'Змінні:',
       ...t.vars.map((v) => `<code>{${v}}</code> — ${VARS[v]}`),
     ].join(NL),
-    kb,
-  };
-}
-
-async function usersList(env) {
-  const { results } = await (
-    await db(env)
-  )
-    .prepare("SELECT * FROM users WHERE status='approved' ORDER BY created")
-    .all();
-  const kb = results.map((u) => [
-    {
-      text: `${displayName(u)}${u.alias ? ` (${u.name || u.username || u.chat_id})` : ''}`,
-      callback_data: `s:uo:${u.chat_id}`,
-    },
-  ]);
-  kb.push(back('s:m'));
-  return {
-    text: '<b>👤 Імена людей</b>\nЯк людину називати в повідомленнях («вимкнула Мама»). Натисни, щоб змінити.',
     kb,
   };
 }
@@ -460,7 +444,8 @@ export async function onSettingsText(env, msg, user) {
     case 'alias': {
       await setAlias(env, state.id, text === '-' ? null : text.slice(0, 40));
       await clearAwait(env, chat);
-      const m = await usersList(env);
+      const u = await (await db(env)).prepare('SELECT * FROM users WHERE chat_id=?').bind(state.id).first();
+      const m = await userCard(env, user, u);
       await send(env, chat, m.text, { reply_markup: { inline_keyboard: m.kb } });
       return true;
     }
@@ -717,9 +702,6 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
       return show(templateCard(env, a));
 
     /* people, time zone, repository, updates */
-    case 'ul':
-      await clearAwait(env, chat);
-      return show(await usersList(env));
     case 'uo':
       await ask(
         env,

@@ -73,20 +73,20 @@ test('two sites: status lists the sites the user sees', async () => {
 
 test('admin opens a site to a user in the permissions screen', async () => {
   const w = twoSites();
-  const [view] = await w.press(ADMIN, `pd:${GUEST}`);
+  const [view] = await w.press(ADMIN, `u:e:${GUEST}`);
   assert.deepEqual(
     view.markup.inline_keyboard.map(([b]) => b.text),
-    ['⚡ Дім: 👁 бачить', '      🚿 Бойлер: як Дім', '⚡ Майстерня: 🚫 немає'],
+    ['⚡ Дім: 👁 бачить', '      🚿 Бойлер: як Дім', '⚡ Майстерня: 🚫 немає', '✅ Зберегти'],
     'devices are listed under the site they belong to'
   );
   const shop = () =>
     w.db.prepare("SELECT perm FROM user_devices WHERE chat_id=? AND device='site.shop'").get(GUEST).perm;
-  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
-  assert.equal(shop(), 'view');
-  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
-  assert.equal(shop(), 'control');
-  await w.press(ADMIN, `pc:${GUEST}:site.shop`);
-  assert.equal(shop(), 'none');
+  for (const want of ['view', 'control', 'none']) {
+    await w.press(ADMIN, `u:e:${GUEST}`);
+    await w.press(ADMIN, 'u:c:site.shop');
+    await w.press(ADMIN, 'u:s');
+    assert.equal(shop(), want);
+  }
 });
 
 test('new users see the first site by default, other sites only when an admin opens them', async () => {

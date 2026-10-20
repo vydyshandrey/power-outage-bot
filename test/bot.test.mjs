@@ -24,7 +24,7 @@ test('access request → admin approves as a user → sees the home, access scre
   assert.match(screen.text, /🔐 Доступ: \u2068Olha\u2069/);
   assert.deepEqual(
     screen.markup.inline_keyboard.map(([b]) => b.text),
-    ['⚡ Дім: 👁 бачить', '      🚿 Бойлер: як Дім']
+    ['⚡ Дім: 👁 бачить', '      🚿 Бойлер: як Дім', '✅ Зберегти']
   );
 });
 
@@ -75,32 +75,71 @@ test('users not approved are ignored', async () => {
 test('a device can be limited below its site, never raised above it', async () => {
   const w = createWorld();
   const perm = (chat, dev) => w.db.prepare('SELECT perm FROM user_devices WHERE chat_id=? AND device=?').get(chat, dev);
+  const edit = async (uid, ...keys) => {
+    await w.press(ADMIN, `u:e:${uid}`);
+    let last;
+    for (const k of keys) last = await w.press(ADMIN, `u:c:${k}`);
+    return last;
+  };
 
   // Member controls the home; the boiler follows → limit to "sees" → "none" → follows again.
-  await w.press(ADMIN, `pc:${MEMBER}:boiler`);
+  await edit(MEMBER, 'boiler');
+  assert.equal(perm(MEMBER, 'boiler'), undefined, 'nothing changes before saving');
+  await w.press(ADMIN, 'u:s');
   assert.equal(perm(MEMBER, 'boiler').perm, 'view');
   assert.ok(textsTo(await w.press(MEMBER, 'dc:boiler:on'), 'answer').includes('Лише перегляд'));
-  await w.press(ADMIN, `pc:${MEMBER}:boiler`);
+  await edit(MEMBER, 'boiler');
+  await w.press(ADMIN, 'u:s');
   assert.equal(perm(MEMBER, 'boiler').perm, 'none');
-  await w.press(ADMIN, `pc:${MEMBER}:boiler`);
+  await edit(MEMBER, 'boiler');
+  await w.press(ADMIN, 'u:s');
   assert.equal(perm(MEMBER, 'boiler'), undefined, 'back to following the site');
 
   // Guest only sees the home: the boiler can only be hidden, not given control.
-  await w.press(ADMIN, `pc:${GUEST}:boiler`);
-  assert.equal(perm(GUEST, 'boiler').perm, 'none');
-  await w.press(ADMIN, `pc:${GUEST}:boiler`);
+  await edit(GUEST, 'boiler', 'boiler');
+  await w.press(ADMIN, 'u:s');
   assert.equal(perm(GUEST, 'boiler'), undefined);
 
-  // No access to the home: nothing to limit.
-  await w.press(ADMIN, `pc:${GUEST}:site.home`); // view → control
-  await w.press(ADMIN, `pc:${GUEST}:site.home`); // control → none
-  const res = await w.press(ADMIN, `pc:${GUEST}:boiler`);
+  // No access to the home (in the same draft): nothing to limit.
+  const res = await edit(GUEST, 'site.home', 'site.home', 'boiler');
   assert.ok(textsTo(res, 'answer').includes("Спершу відкрий доступ до об'єкта"));
+  await w.press(ADMIN, 'u:x');
+  assert.equal(perm(GUEST, 'site.home').perm, 'view', 'cancel keeps what was saved');
 });
 
-test('the users list shows each person’s access per site', async () => {
+test('the users list is compact; actions are in a person’s card', async () => {
   const w = createWorld();
-  const list = await w.say(ADMIN, '👥 Користувачі');
-  assert.ok(textsTo(list, ADMIN).some((t) => t.includes('Member') && t.includes('Дім: 🎛 керує')));
-  assert.ok(textsTo(list, ADMIN).some((t) => t.includes('Guest') && t.includes('Дім: 👁 бачить')));
+  const [list] = await w.say(ADMIN, '👥 Користувачі');
+  assert.match(list.text, /👤 \u2068Member\u2069: Дім 🎛/);
+  assert.match(list.text, /👤 \u2068Guest\u2069: Дім 👁/);
+  const buttons = list.markup.inline_keyboard.flat();
+  assert.ok(buttons.length >= 3 && list.markup.inline_keyboard.every((row) => row.length <= 2));
+
+  const [card] = await w.press(ADMIN, `u:o:${GUEST}`);
+  const actions = card.markup.inline_keyboard.flat().map((b) => b.callback_data);
+  assert.ok(
+    actions.includes(`u:e:${GUEST}`) && actions.includes(`a:${GUEST}:admin`) && actions.includes(`u:r:${GUEST}`)
+  );
+  await w.press(ADMIN, `u:r:${GUEST}`);
+  assert.equal(w.db.prepare('SELECT status FROM users WHERE chat_id=?').get(GUEST).status, 'approved', 'asks first');
+  await w.press(ADMIN, `r:${GUEST}`);
+  assert.equal(w.db.prepare('SELECT status FROM users WHERE chat_id=?').get(GUEST).status, 'rejected');
+});
+
+test('access from a device: pick people from the list or by search, then save', async () => {
+  const w = createWorld();
+  const [view] = await w.press(ADMIN, 'u:k:boiler');
+  assert.match(view.text, /Доступ: 🚿 Бойлер/);
+  assert.ok(view.markup.inline_keyboard.flat().some((b) => b.text === 'Guest: як Дім (👁)'));
+
+  await w.press(ADMIN, 'u:q');
+  const [found] = await w.say(ADMIN, 'gue');
+  const names = found.markup.inline_keyboard.flat().map((b) => b.text);
+  assert.ok(names.includes('Guest: як Дім (👁)') && !names.some((n) => n.startsWith('Member')));
+  await w.press(ADMIN, `u:c:${GUEST}`);
+  await w.press(ADMIN, 'u:s');
+  assert.equal(
+    w.db.prepare("SELECT perm FROM user_devices WHERE chat_id=? AND device='boiler'").get(GUEST).perm,
+    'none'
+  );
 });

@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.7.1';
+export const VERSION = '1.8.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
