@@ -23,7 +23,7 @@ enabled = true
 
 # Пристрої. Спочатку можна лишити порожніми, розгорнути й відкрити /discover?key=<ACCESS_KEY>
 [vars]
-INVERTER = "deye"                 # deye — хмара Deye; dess — SmartESS, WatchPower та інші застосунки DESS Monitor
+INVERTER = "deye"                 # deye — Deye; dess — SmartESS, WatchPower; valueclouds — SmartValue
 DEYE_SN = ""                      # серійний номер інвертора Deye
 # Для INVERTER = "dess" — значення з /discover:
 # DESS_PN = ""
@@ -31,6 +31,10 @@ DEYE_SN = ""                      # серійний номер інвертор
 # DESS_DEVCODE = ""
 # DESS_DEVADDR = ""
 # DESS_PLATFORM = "shinemonitor"  # лише для застосунку SmartClient for Solar
+# Для INVERTER = "valueclouds" (застосунок SmartValue):
+# VC_PN = ""                      # номер на наклейці Wi-Fi-модуля, 18 символів
+# VC_SN = ""                      # серійний номер інвертора
+# VC_DEVCODE і VC_DEVADDR підкаже /discover
 MIDEA_DEVICE_ID = ""              # ідентифікатор бойлера Midea
 TZ = "Europe/Kyiv"
 # NOTIFY_NAME = "Асистент"     # підпис службових повідомлень /notify (необов'язково)

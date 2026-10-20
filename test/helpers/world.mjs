@@ -71,6 +71,50 @@ function fakeDess(w, url) {
   return { err: 404, desc: `unknown action ${action}` };
 }
 
+export const VC_USER = 'owner@example.com';
+export const VC_PASSWORD = 'secret';
+
+/** Fake ValueClouds (SmartValue): HTTP 200 for everything, errors only in the body. */
+function fakeValueClouds(w, url, init) {
+  if (url.endsWith('/ppr/web/login/login')) {
+    const b = JSON.parse(init.body);
+    if (b.project !== 'IOT') return { success: false, code: 24, message: 'corresponding project not found' };
+    if (b.account !== VC_USER || b.password !== sha1(VC_PASSWORD)) {
+      return { success: false, code: 115140, message: 'account or password error' };
+    }
+    w.vcLogins++;
+    w.vcToken = `vc${w.vcLogins}`;
+    return { success: true, code: 0, data: { token: w.vcToken, secret: 's' } };
+  }
+  if (init.headers?.Token !== w.vcToken) return { success: false, code: 401, message: 'token invalid' };
+  const q = new URL(url).searchParams;
+  if (q.get('devcode') !== '6409' || q.get('devaddr') !== '255') {
+    return { success: false, code: 12, message: 'device does not exist' };
+  }
+  if (w.vcFails > 0) {
+    w.vcFails--;
+    return { success: false, code: 500, message: 'system busy' };
+  }
+  const on = w.grid;
+  return {
+    code: 0,
+    data: {
+      gts: w.deyeTs * 1000,
+      pars: {
+        gd_: [
+          { id: 'gd_eybond_read_21', par: 'LineVolt_L1', val: on ? '229.4' : '7.8', unit: 'V' },
+          { id: 'gd_eybond_read_23', par: 'LineFreq', val: on ? '50.0' : '0', unit: 'Hz' },
+        ],
+        bt_: [
+          { id: 'bt_battery_capacity', par: 'BattSoc', val: '77', unit: '%' },
+          { id: 'battery_active_discharging_power', par: 'Total battery power', val: on ? '-40' : '512', unit: 'W' },
+        ],
+        bc_: [{ id: 'load_active_power', par: 'OutSumW', val: '537', unit: 'W' }],
+      },
+    },
+  };
+}
+
 /** Minimal D1 API over node:sqlite. */
 function createD1() {
   const sql = new DatabaseSync(':memory:');
@@ -111,6 +155,8 @@ export function createWorld({ users = true } = {}) {
     deyeFails: 0, // next N Deye /device/latest calls answer 500
     dessFails: 0, // next N DESS data calls answer a platform error
     dessLogins: 0,
+    vcFails: 0,
+    vcLogins: 0,
     sent: [], // Telegram messages: { chat, text, markup }
     controls: [], // Midea power commands: 'on' | 'off'
     pending: [],
@@ -129,6 +175,7 @@ export function createWorld({ users = true } = {}) {
   globalThis.fetch = async (input, init = {}) => {
     const url = String(input);
     if (url.startsWith('https://api.dessmonitor.com/public/')) return json(fakeDess(w, url));
+    if (url.startsWith('https://api.valueclouds.com/')) return json(fakeValueClouds(w, url, init));
     const body = init.body ? JSON.parse(init.body) : {};
     if (url.includes('/account/token')) return json({ accessToken: 'bearer T', expiresIn: 5_184_000 });
     if (url.includes('/device/latest')) {
@@ -243,6 +290,20 @@ export function createWorld({ users = true } = {}) {
       DESS_DEVCODE: '2451',
       DESS_DEVADDR: '1',
     });
+    return w;
+  };
+
+  /** Switches the deployment to an inverter on ValueClouds (SmartValue app). */
+  w.useValueClouds = ({ devcode = true } = {}) => {
+    for (const k of ['DEYE_APP_ID', 'DEYE_APP_SECRET', 'DEYE_EMAIL', 'DEYE_PASSWORD', 'DEYE_SN']) delete w.env[k];
+    Object.assign(w.env, {
+      INVERTER: 'valueclouds',
+      VC_USER,
+      VC_PASSWORD,
+      VC_PN: 'I30000230600000000',
+      VC_SN: '0000000001',
+    });
+    if (devcode) Object.assign(w.env, { VC_DEVCODE: '6409', VC_DEVADDR: '255' });
     return w;
   };
 

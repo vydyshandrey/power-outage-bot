@@ -2,6 +2,14 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/uk/1.1.0/), версії — [SemVer](https://semver.org/lang/uk/).
 
+## [1.3.0] — 2026-10-20
+
+### Додано
+
+- Інвертори з застосунком SmartValue (хмара ValueClouds від Eybond), наприклад MUST PV18 з Wi-Fi-модулем WFBLE.DTU.PlugPro: `INVERTER = "valueclouds"`.
+- `/discover` для SmartValue перевіряє вхід і підбирає `VC_DEVCODE` і `VC_DEVADDR` для заданих номерів модуля й інвертора.
+- 6 нових тестів.
+
 ## [1.2.0] — 2026-10-20
 
 ### Додано

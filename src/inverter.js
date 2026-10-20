@@ -4,10 +4,12 @@
  *
  *   deye — Deye Cloud OpenAPI (default)
  *   dess — DESS Monitor / ShineMonitor (SmartESS, WatchPower and rebranded apps)
+ *   valueclouds — ValueClouds (SmartValue app)
  */
 
 import { dessDevices, dessLatest } from './dess.js';
 import { deyeLatest, deyeStations } from './deye.js';
+import { valueCloudsDiscover, valueCloudsLatest } from './valueclouds.js';
 
 const PROVIDERS = {
   deye: {
@@ -28,6 +30,12 @@ const PROVIDERS = {
     configured: (env) => Boolean(env.DESS_SN),
     latest: dessLatest,
     discover: dessDevices,
+  },
+  valueclouds: {
+    name: 'SmartValue',
+    configured: (env) => Boolean(env.VC_SN),
+    latest: valueCloudsLatest,
+    discover: valueCloudsDiscover,
   },
 };
 

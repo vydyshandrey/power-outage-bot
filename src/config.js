@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.2.0';
+export const VERSION = '1.3.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -58,7 +58,7 @@ export const deviceConfigured = (env, dev) => (dev === 'boiler' ? Boolean(env.MI
  * @property {string} [NOTIFY_KEY]
  * @property {string} [NOTIFY_NAME]
  * @property {string} [TICK_KEY]
- * @property {'deye'|'dess'} [INVERTER] which cloud the inverter reports to; default deye
+ * @property {'deye'|'dess'|'valueclouds'} [INVERTER] which cloud the inverter reports to; default deye
  * @property {string} [DEYE_APP_ID]
  * @property {string} [DEYE_APP_SECRET]
  * @property {string} [DEYE_EMAIL]
@@ -73,6 +73,12 @@ export const deviceConfigured = (env, dev) => (dev === 'boiler' ? Boolean(env.MI
  * @property {string} [DESS_SN]
  * @property {string} [DESS_DEVCODE]
  * @property {string} [DESS_DEVADDR]
+ * @property {string} [VC_USER] SmartValue account
+ * @property {string} [VC_PASSWORD]
+ * @property {string} [VC_PN] Wi-Fi module number from its sticker
+ * @property {string} [VC_SN] inverter serial number
+ * @property {string} [VC_DEVCODE] default 6409, /discover finds it
+ * @property {string} [VC_DEVADDR] default 255
  * @property {string} MIDEA_EMAIL
  * @property {string} MIDEA_PASSWORD
  * @property {string} [MIDEA_DEVICE_ID]
