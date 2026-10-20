@@ -7,9 +7,13 @@
  *   3. Grid lost → switch the site's automated devices off, retrying on every tick until it works.
  *   4. Grid back for ON_DELAY_SEC → switch them on, but only those automation switched off.
  *   5. If a device action keeps failing for GIVEUP_SEC, ask a human once, keep retrying.
+ *   6. Without grid, warn the site's viewers once when the battery falls to the site's threshold.
+ *   7. Every fresh reading is stored for charts; once a day, yesterday's summary goes out.
  */
 
 import {
+  BATTERY_ALERT_DEFAULT,
+  BATTERY_ALERT_HYST,
   ERROR_REPEAT_SEC,
   GIVEUP_SEC,
   LATE_NOTE_SEC,
@@ -21,7 +25,8 @@ import {
   siteKey,
   sitesOf,
 } from './config.js';
-import { kvGet, kvSet, logEnergy, logEvent } from './db.js';
+import { dailySummaries, logReading } from './charts.js';
+import { kvGet, kvSet, logEvent } from './db.js';
 import { DK, deviceState, setDevicePower } from './devices.js';
 import { inverterConfigured, inverterLatest, inverterName } from './inverter.js';
 import { render } from './messages.js';
@@ -226,13 +231,10 @@ async function tickSite(env, site) {
   }
   await inverterUp(env, site);
 
-  // The energy log has one series; it belongs to the first site.
-  if (site.primary && String(d.ts) !== (await kvGet(env, 'last_deye_ts'))) {
-    await kvSet(env, 'last_deye_ts', d.ts);
-    await logEnergy(env, d);
-  }
+  await logReading(env, site, d);
 
   if (await checkStale(env, site, d)) return;
+  await checkBattery(env, site, d);
 
   const prev = await kvGet(env, K(site, 'grid'));
   if (prev !== (d.grid ? 'on' : 'off')) {
@@ -250,6 +252,27 @@ async function tickSite(env, site) {
   }
 }
 
+/* ---------- battery ---------- */
+
+/** The site's "battery low" threshold, %; 0 turns the warning off. */
+export const batteryThreshold = (env, site) => {
+  const v = env.CFG?.settings?.[`batt@${site.id}`];
+  return v === undefined ? BATTERY_ALERT_DEFAULT : Number(v) || 0;
+};
+
+/** Without grid: one warning when the battery reaches the threshold, again only after it recovers. */
+async function checkBattery(env, site, d) {
+  const thr = batteryThreshold(env, site);
+  const key = K(site, 'batt_low');
+  const warned = (await kvGet(env, key)) === '1';
+  if (warned && (d.grid || d.soc >= thr + BATTERY_ALERT_HYST)) return kvSet(env, key, '0');
+  if (warned || !thr || d.grid || !Number.isFinite(d.soc) || d.soc > thr) return;
+  await kvSet(env, key, '1');
+  const since = Number(await kvGet(env, K(site, 'grid_since'))) || null;
+  const vars = { ...siteVars(env, site), soc: d.soc, load: d.load, duration: since ? fmtDur(now() - since) : '' };
+  await broadcastDevice(env, siteKey(site), render(env, 'battery_low', vars));
+}
+
 /** @param {import('./config.js').Env} env */
 export async function tick(env) {
   await announce(env);
@@ -260,6 +283,11 @@ export async function tick(env) {
     } catch (e) {
       await reportError(env, site.name, e);
     }
+  }
+  try {
+    await dailySummaries(env);
+  } catch (e) {
+    await reportError(env, 'Підсумки дня', e);
   }
   try {
     await checkUpdates(env);

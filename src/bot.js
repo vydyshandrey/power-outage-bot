@@ -21,6 +21,7 @@ import { startUpdate } from './updates.js';
 import { deviceCard, deviceHistory, devicesMenu, outagesReport, statusText } from './reports.js';
 import { RELEASES_BUTTON, broadcastDevice, edit, mainKeyboard, seesReleases, send, tg } from './telegram.js';
 import { releasesView } from './releases.js';
+import { chartMenu, sendChart, toggleSummaries } from './charts.js';
 import { NL, now } from './util.js';
 
 const roleButtons = (uid) => [
@@ -82,7 +83,14 @@ export async function onMessage(env, msg) {
 
   if (text === '/status' || text === '📊 Статус') {
     return send(env, id, await statusText(env, user), {
-      reply_markup: { inline_keyboard: [[{ text: '🔌 Відключення за 7 днів', callback_data: 'g:7' }]] },
+      reply_markup: {
+        inline_keyboard: [
+          [
+            { text: '📈 Графік', callback_data: 'cg' },
+            { text: '🔌 Відключення за 7 днів', callback_data: 'g:7' },
+          ],
+        ],
+      },
     });
   }
   if (text === '/devices' || text === '🏠 Пристрої') {
@@ -198,6 +206,20 @@ export async function onCallback(env, cq) {
   if (act === 'g') {
     await send(env, me.chat_id, await outagesReport(env, me, Number(a1) || 7));
     return done();
+  }
+  if (act === 'cg') {
+    const v = await chartMenu(env, me);
+    await send(env, me.chat_id, v.text, { reply_markup: { inline_keyboard: v.kb } });
+    return done();
+  }
+  if (act === 'ch') {
+    await done('Малюю графік…');
+    if (!(await sendChart(env, me, a1, a2))) await send(env, me.chat_id, "Немає доступу до цього об'єкта.");
+    return;
+  }
+  if (act === 'ns') {
+    const off = await toggleSummaries(env, me.chat_id);
+    return done(off ? 'Підсумки дня вимкнено. Увімкнути: 📊 Статус → 📈 Графік.' : 'Підсумки дня знову надходитимуть.');
   }
   if (act === 'rl') {
     if (!seesReleases(env, me.role)) return done('Немає доступу');

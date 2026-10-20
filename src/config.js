@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.9.0';
+export const VERSION = '1.10.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -28,6 +28,18 @@ export const LATE_NOTE_SEC = 150;
 export const ERROR_REPEAT_SEC = 3600;
 
 export const DEFAULT_TZ = 'Europe/Kyiv';
+
+/** Readings history kept for charts. Days. */
+export const READINGS_DAYS = 40;
+
+/** Local hour after which yesterday's summary goes out. */
+export const SUMMARY_HOUR = 8;
+
+/** Battery level that triggers "🪫 сідає батарея" without grid, unless the admin set another. % */
+export const BATTERY_ALERT_DEFAULT = 30;
+
+/** The warning is sent again only after the battery recovers by this much. % */
+export const BATTERY_ALERT_HYST = 5;
 export const DEFAULT_DEYE_API = 'https://eu1-developer.deyecloud.com/v1.0';
 
 /**

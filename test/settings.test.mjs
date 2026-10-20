@@ -61,7 +61,7 @@ test('upgrade: what was in wrangler.toml becomes settings, inverters become devi
       params: { cloud: 'valueclouds', account: 1, pn: 'I300', sn: 'DEV1', devcode: '6422', devaddr: '4' },
     },
   ]);
-  assert.equal(w.kv('schema_v'), '6');
+  assert.equal(w.kv('schema_v'), '7');
   const dev = w.db.prepare("SELECT * FROM devices WHERE type='midea_boiler'").get();
   assert.equal(dev.id, 'boiler');
   assert.equal(JSON.parse(dev.params).device_id, '100000000000001');

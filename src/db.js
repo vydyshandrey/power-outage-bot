@@ -18,6 +18,7 @@ export const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS sites (id TEXT PRIMARY KEY, name TEXT, cloud TEXT, account INTEGER, params TEXT, sort INTEGER)',
   'CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, type TEXT, name TEXT, icon TEXT, site TEXT, params TEXT, auto INTEGER, sort INTEGER)',
   'CREATE TABLE IF NOT EXISTS templates (k TEXT PRIMARY KEY, text TEXT)',
+  'CREATE TABLE IF NOT EXISTS readings (site TEXT, ts INTEGER, grid INTEGER, volt REAL, load INTEGER, batt INTEGER, soc INTEGER, PRIMARY KEY (site, ts))',
 ];
 
 /** Databases already prepared in this isolate. */
@@ -44,17 +45,32 @@ export async function db(env) {
  *              "notify" users see it; a device row becomes a limit below the site level;
  *   v5 (1.6.0) configuration moves from wrangler.toml into the database, where the owner
  *              edits it in the bot; users get an alias column;
- *   v6 (1.7.0) inverters become devices of their sites; a site points at its grid source.
+ *   v6 (1.7.0) inverters become devices of their sites; a site points at its grid source;
+ *   v7 (1.10.0) readings are kept per site (table readings); the old single-site energy
+ *              log is copied in as the first site's history.
  */
 export async function migrate(env) {
   const D = env.DB;
   const row = await D.prepare("SELECT v FROM kv WHERE k='schema_v'").first();
   const v = Number(row?.v) || 0;
-  if (v >= 6) return;
+  if (v >= 7) return;
   if (v < 4) await migrateRoles(env);
   if (v < 5) await migrateConfig(env);
-  await migrateInverters(env);
-  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','6') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+  if (v < 6) await migrateInverters(env);
+  await migrateReadings(env);
+  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','7') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+}
+
+/** v7: the energy log of the first site becomes its readings history. */
+async function migrateReadings(env) {
+  const D = env.DB;
+  const first = await D.prepare('SELECT id FROM sites ORDER BY sort, rowid LIMIT 1').first();
+  if (!first) return;
+  await D.prepare(
+    'INSERT OR IGNORE INTO readings (site,ts,grid,volt,load,batt,soc) SELECT ?,ts,grid,volt,load,batt,soc FROM energy'
+  )
+    .bind(first.id)
+    .run();
 }
 
 /** v6: an inverter is a device of its site; the site names which inverter tells it about the grid. */
@@ -232,15 +248,5 @@ export async function logEvent(env, type, device, actor, data = null) {
   )
     .prepare('INSERT INTO events (ts,type,device,actor,data) VALUES (?,?,?,?,?)')
     .bind(now(), type, device, actor, data ? JSON.stringify(data) : null)
-    .run();
-}
-
-/** Stores an inverter reading once per logger timestamp. */
-export async function logEnergy(env, d) {
-  await (
-    await db(env)
-  )
-    .prepare('INSERT OR IGNORE INTO energy (ts,grid,volt,load,batt,soc) VALUES (?,?,?,?,?,?)')
-    .bind(d.ts, d.grid ? 1 : 0, d.volt, d.load, d.batt, d.soc)
     .run();
 }

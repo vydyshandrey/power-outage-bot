@@ -23,7 +23,7 @@ test('/tick with TICK_KEY runs the check', async () => {
   const w = createWorld();
   const res = await w.http(`/tick?t=${TICK_KEY}`);
   assert.deepEqual(await res.json(), { ok: true });
-  assert.ok(w.kv('last_deye_ts'));
+  assert.ok(w.db.prepare('SELECT count(*) n FROM readings').get().n > 0);
 });
 
 test('/notify delivers to admins only', async () => {

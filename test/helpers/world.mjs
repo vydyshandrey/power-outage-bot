@@ -147,6 +147,7 @@ export function createWorld({ users = true } = {}) {
   const D1 = createD1();
   const w = {
     clock: 1_800_000_000,
+    soc: 90,
     grid: true,
     deyeTs: 0,
     boiler: { power: 'on', cur_temperature: 57, temperature: 60 },
@@ -159,7 +160,8 @@ export function createWorld({ users = true } = {}) {
     upstream: null, // { version, changelog } of the public project
     dispatched: [], // GitHub workflow starts
     vcLogins: 0,
-    sent: [], // Telegram messages: { chat, text, markup }
+    sent: [], // Telegram messages: { chat, text, markup, photo? }
+    charts: [], // chart configurations sent to the renderer
     controls: [], // Midea power commands: 'on' | 'off'
     pending: [],
     db: D1.sql,
@@ -178,7 +180,22 @@ export function createWorld({ users = true } = {}) {
     const url = String(input);
     if (url.startsWith('https://api.dessmonitor.com/public/')) return json(fakeDess(w, url));
     if (url.startsWith('https://api.valueclouds.com/')) return json(fakeValueClouds(w, url, init));
-    const body = init.body ? JSON.parse(init.body) : {};
+    if (url === 'https://quickchart.io/chart') {
+      w.charts.push(JSON.parse(init.body));
+      if (w.chartFails) return { ok: false, status: 500, arrayBuffer: async () => new ArrayBuffer(0) };
+      return { ok: true, status: 200, arrayBuffer: async () => new Uint8Array([137, 80, 78, 71]).buffer };
+    }
+    if (url.endsWith('/sendPhoto')) {
+      const f = init.body;
+      w.sent.push({
+        chat: Number(f.get('chat_id')),
+        text: f.get('caption'),
+        photo: true,
+        markup: JSON.parse(f.get('reply_markup') || 'null'),
+      });
+      return json({ ok: true, result: {} });
+    }
+    const body = typeof init.body === 'string' ? JSON.parse(init.body) : {};
     if (url.includes('/account/token')) return json({ accessToken: 'bearer T', expiresIn: 5_184_000 });
     if (url.includes('/device/latest')) {
       if (w.deyeFails > 0) {
@@ -194,7 +211,7 @@ export function createWorld({ users = true } = {}) {
             dataList: [
               { key: 'GridVoltageL1L2', value: on ? '230' : '0' },
               { key: 'GridFrequency', value: on ? '50' : '0' },
-              { key: 'SOC', value: '90' },
+              { key: 'SOC', value: String(w.soc) },
               { key: 'BatteryPower', value: on ? '-50' : '420' },
               { key: 'TotalConsumptionPower', value: '410' },
             ],

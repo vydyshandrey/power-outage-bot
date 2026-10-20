@@ -7,6 +7,7 @@
  */
 
 import { userCard } from './access.js';
+import { batteryThreshold } from './automation.js';
 import { CATEGORIES, DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
 import { db, kvGet, kvSet, usersBy } from './db.js';
 import { listDevices, missingDeviceSecrets } from './devices.js';
@@ -125,7 +126,11 @@ function siteCard(env, id) {
     ],
   ];
   if (invertersOf(env, id).length > 1) kb.push([{ text: '⚡ Звідки брати світло', callback_data: `s:si:${id}` }]);
-  kb.push([{ text: '👥 Доступ людей', callback_data: `u:k:site.${id}` }]);
+  const thr = batteryThreshold(env, s);
+  kb.push([
+    { text: '👥 Доступ людей', callback_data: `u:k:site.${id}` },
+    { text: `🪫 Батарея: ${thr ? `${thr}%` : 'не попереджати'}`, callback_data: `s:bt:${id}` },
+  ]);
   kb.push([{ text: '🗑 Видалити', callback_data: `s:sd:${id}` }], back('s:sl'));
   return { text: lines.join(NL), kb };
 }
@@ -555,6 +560,20 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
           ],
         ],
       });
+    case 'bt':
+      return show({
+        text: `<b>🪫 Сідає батарея</b>${NL}Коли світла немає і заряд опускається до цього рівня, бот один раз попереджає всіх, хто бачить об'єкт.`,
+        kb: [
+          [0, 20, 30, 40, 50].map((p) => ({
+            text: `${p === batteryThreshold(env, siteOf(env, a) || { id: a }) ? '✅ ' : ''}${p ? `${p}%` : 'Ні'}`,
+            callback_data: `s:bT:${a}:${p}`,
+          })),
+          back(`s:so:${a}`),
+        ],
+      });
+    case 'bT':
+      await setSetting(env, `batt@${a}`, String(Number(b) || 0));
+      return show(siteCard(env, a));
     case 'sD':
       await deleteSite(env, a);
       return show(sitesList(env));

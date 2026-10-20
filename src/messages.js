@@ -77,6 +77,12 @@ export const TEMPLATES = {
     vars: ['device', 'object', 'who'],
     sample: { device: 'Бойлер', object: 'Дім', who: 'Мама' },
   },
+  battery_low: {
+    title: '🪫 Сідає батарея',
+    text: `🪫 {where}Батарея {soc}%, світла немає {duration}.${NL}Споживання {load} Вт. Вимкніть зайве, якщо можете.`,
+    vars: ['where', 'object', 'soc', 'duration', 'load'],
+    sample: { where: '', object: 'Дім', soc: '30', duration: '3 год 10 хв', load: '410' },
+  },
   inverter_down: {
     title: '⚠️ Інвертор не відповідає (адмінам)',
     text: `⚠️ {source} не відповідає {duration}. Автоматика на паузі, доки зв'язок не повернеться.${NL}<code>{error}</code>`,

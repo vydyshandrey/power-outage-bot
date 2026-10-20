@@ -34,6 +34,9 @@ export const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp
 /* Time zone is a deployment-wide setting, applied once per invocation. */
 let timeZone = DEFAULT_TZ;
 
+/** The time zone in effect. */
+export const getTimeZone = () => timeZone;
+
 /** @param {string | undefined} tz */
 export function setTimeZone(tz) {
   timeZone = tz || DEFAULT_TZ;
