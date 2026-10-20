@@ -14,12 +14,17 @@ const K = (site, k) => (site.primary ? k : `${k}@${site.id}`);
 export async function statusText(env, user) {
   const sites = await viewableSites(env, user);
   const titled = sitesOf(env).length > 1;
+  const devices = [];
+  for (const dev of await viewableDevices(env, user)) devices.push(await deviceLine(env, dev));
   const lines = [];
   for (const site of sites) {
     if (titled) lines.push(`${lines.length ? NL : ''}<b>⚡ ${esc(site.name)}</b>`);
     lines.push(...(await siteLines(env, site)));
+    // Devices (the boiler) belong to the first site, so they are listed under it.
+    if (site.primary) lines.push(...devices.splice(0));
   }
-  for (const dev of await viewableDevices(env, user)) lines.push(await deviceLine(env, dev));
+  if (devices.length && titled) lines.push(`${lines.length ? NL : ''}<b>🏠 Пристрої</b>`);
+  lines.push(...devices);
   return lines.join(NL) || "Доступних об'єктів і пристроїв немає. Попроси адміністратора надати доступ.";
 }
 

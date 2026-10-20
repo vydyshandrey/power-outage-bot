@@ -52,7 +52,7 @@ test('two sites: status lists the sites the user sees', async () => {
   const w = twoSites();
   await w.tick();
   const [admin] = await w.say(ADMIN, '📊 Статус');
-  assert.match(admin.text, /⚡ Дім[\s\S]*⚡ Майстерня/);
+  assert.match(admin.text, /⚡ Дім[\s\S]*🚿 Бойлер[\s\S]*⚡ Майстерня/, 'the boiler is listed under the home site');
   assert.match(admin.text, /🔋 Батарея: 77%/);
   const [guest] = await w.say(GUEST, '📊 Статус');
   assert.doesNotMatch(guest.text, /Майстерня/);
