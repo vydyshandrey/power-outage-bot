@@ -5,6 +5,7 @@
  */
 
 import { kvSet, logEvent } from './db.js';
+import { inverterLatest } from './inverter.js';
 import { Midea } from './midea.js';
 
 /**
@@ -22,6 +23,28 @@ export const DK = (dev, k) => (dev.id === 'boiler' ? k : `${k}@${dev.id}`);
  */
 
 const DRIVERS = {
+  inverter: {
+    /** An inverter is read, not switched: its state is the reading of its cloud. */
+    async state(env, dev) {
+      const d = await inverterLatest(env, {
+        inverter: dev.params.cloud,
+        account: dev.params.account || 1,
+        params: dev.params,
+      });
+      return {
+        on: d.grid,
+        short: `${d.grid ? 'мережа є' : 'мережі немає'}, батарея ${d.soc}%, споживання ${d.load} Вт`,
+        details: [
+          d.grid ? `💡 Мережа є, ${d.volt} В` : '🔌 Мережі немає',
+          `🔋 Батарея: ${d.soc}% (${d.batt} Вт)`,
+          `🏠 Споживання: ${d.load} Вт`,
+        ],
+        temp: null,
+      };
+    },
+    secrets: [],
+  },
+
   midea_boiler: {
     /** @returns {Promise<DeviceState>} */
     async state(env, dev) {

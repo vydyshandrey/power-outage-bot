@@ -42,7 +42,7 @@ test('upgrade to v4: old roles become levels on the first site, nobody loses acc
   assert.deepEqual(perms(50), { 'site.home': 'control', boiler: 'view' }, 'a lower boiler right becomes a limit');
   assert.deepEqual(perms(51), { 'site.home': 'control' }, 'a higher boiler right lifts the site, not lost');
   assert.equal(w.db.prepare("SELECT count(*) n FROM users WHERE role IN ('control','notify')").get().n, 0);
-  assert.equal(w.kv('schema_v'), '5');
+  assert.equal(w.kv('schema_v'), '6');
 });
 
 test('two sites: notifications carry the site name and go only to people who see the site', async () => {

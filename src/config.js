@@ -6,7 +6,7 @@
  * Worker secrets and never appear in the code.
  */
 
-export const VERSION = '1.6.1';
+export const VERSION = '1.7.0';
 
 /** Grid is considered present when voltage and frequency are above these values. */
 export const GRID_V_MIN = 180;
@@ -45,10 +45,23 @@ export const RANK = { user: 1, notify: 1, control: 1, admin: 3 };
 export const LEVELS = ['none', 'view', 'control'];
 export const LEVEL_LABEL = { none: '🚫 немає', view: '👁 бачить', control: '🎛 керує' };
 
-/** Device types the bot can control. A new type (socket, ATS) gets a driver in devices.js. */
-export const DEVICE_TYPES = {
-  midea_boiler: { name: 'Бойлер', icon: '🚿' },
+/**
+ * Device categories. An inverter tells its site about the grid and the battery; the others
+ * are switched by people and by automation. New categories (socket, AC, ATS) are added here.
+ */
+export const CATEGORIES = {
+  inverter: { name: 'Інвертор', icon: '⚡', control: false },
+  boiler: { name: 'Бойлер', icon: '🚿', control: true },
 };
+
+/** Device types: a category plus the vendor cloud that serves it. Each has a driver in devices.js. */
+export const DEVICE_TYPES = {
+  inverter: { category: 'inverter', name: 'Інвертор', icon: '⚡' },
+  midea_boiler: { category: 'boiler', name: 'Бойлер', icon: '🚿', vendor: 'Midea' },
+};
+
+/** True for devices people and automation switch on and off. @param {Device} dev */
+export const controllable = (dev) => Boolean(CATEGORIES[DEVICE_TYPES[dev.type]?.category]?.control);
 
 /**
  * @typedef {object} Site
@@ -58,6 +71,7 @@ export const DEVICE_TYPES = {
  * @property {number} account which set of cloud secrets to use: 1 → DESS_USER, 2 → DESS_USER_2 …
  * @property {Record<string, string>} params inverter identifiers in that cloud (sn, pn …)
  * @property {boolean} primary the first site keeps the historical storage keys
+ * @property {string | null} [source] id of the inverter device that reports the site's grid
  */
 
 /**
@@ -137,12 +151,13 @@ export const deviceById = (env, id) => devicesOf(env).find((d) => d.id === id) |
 export const siteKey = (site) => `site.${site.id}`;
 
 /**
- * Sites with the devices that belong to them: the structure of the access screen.
+ * Sites with the controllable devices that belong to them: the structure of the access screen.
+ * (An inverter needs no permission of its own: whoever sees the site sees its data.)
  * @param {Env} env
  * @returns {Array<{site: Site, key: string, devices: string[]}>}
  */
 export function siteTree(env) {
-  const devices = devicesOf(env);
+  const devices = devicesOf(env).filter(controllable);
   return sitesOf(env).map((site) => ({
     site,
     key: siteKey(site),

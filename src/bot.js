@@ -10,7 +10,7 @@
  * a:<uid>:<role> approve · r:<uid> reject or revoke.
  */
 
-import { LEVELS, LEVEL_LABEL, ROLES, deviceById, deviceSite, siteKey, siteTree } from './config.js';
+import { LEVELS, LEVEL_LABEL, ROLES, controllable, deviceById, deviceSite, siteKey, siteTree } from './config.js';
 import { clearPerm, db, deviceLimit, getPerm, getUser, kvSet, resetPerms, setPerm, usersBy } from './db.js';
 import { DK, setDevicePower } from './devices.js';
 import { render } from './messages.js';
@@ -193,7 +193,7 @@ async function handleDevice(env, cq, me, act, dev, arg, done) {
     return done();
   }
   if (act === 'dc') {
-    if (perm !== 'control') return done('Лише перегляд');
+    if (perm !== 'control' || !controllable(device)) return done('Лише перегляд');
     const on = arg === 'on';
     const who = displayName(me);
     try {

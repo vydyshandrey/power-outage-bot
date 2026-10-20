@@ -43,16 +43,37 @@ export async function db(env) {
  *   v4 (1.5.0) two roles and per-site levels — "control" users control the first site,
  *              "notify" users see it; a device row becomes a limit below the site level;
  *   v5 (1.6.0) configuration moves from wrangler.toml into the database, where the owner
- *              edits it in the bot; users get an alias column.
+ *              edits it in the bot; users get an alias column;
+ *   v6 (1.7.0) inverters become devices of their sites; a site points at its grid source.
  */
 export async function migrate(env) {
   const D = env.DB;
   const row = await D.prepare("SELECT v FROM kv WHERE k='schema_v'").first();
   const v = Number(row?.v) || 0;
-  if (v >= 5) return;
+  if (v >= 6) return;
   if (v < 4) await migrateRoles(env);
-  await migrateConfig(env);
-  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','5') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+  if (v < 5) await migrateConfig(env);
+  await migrateInverters(env);
+  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','6') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+}
+
+/** v6: an inverter is a device of its site; the site names which inverter tells it about the grid. */
+async function migrateInverters(env) {
+  const D = env.DB;
+  const cols = (await D.prepare('PRAGMA table_info(sites)').all()).results.map((c) => c.name);
+  if (!cols.includes('source')) await D.prepare('ALTER TABLE sites ADD COLUMN source TEXT').run();
+  const { results } = await D.prepare("SELECT * FROM sites WHERE cloud IS NOT NULL AND cloud != ''").all();
+  let n = 0;
+  for (const s of results) {
+    const params = { cloud: s.cloud, account: Number(s.account) || 1, ...JSON.parse(s.params || '{}') };
+    let id;
+    do id = `i${++n}`;
+    while (await D.prepare('SELECT 1 FROM devices WHERE id=?').bind(id).first());
+    await D.prepare('INSERT INTO devices (id,type,name,icon,site,params,auto,sort) VALUES (?,?,?,?,?,?,?,?)')
+      .bind(id, 'inverter', 'Інвертор', '⚡', s.id, JSON.stringify(params), 0, s.sort)
+      .run();
+    await D.prepare("UPDATE sites SET source=?, cloud=NULL, params='{}' WHERE id=?").bind(id, s.id).run();
+  }
 }
 
 /** v4: old roles become levels on the first site, nobody loses access. */

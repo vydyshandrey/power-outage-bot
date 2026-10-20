@@ -22,14 +22,6 @@ const parse = (s) => {
  */
 export async function loadConfig(env) {
   const D = await db(env);
-  const sites = (await D.prepare('SELECT * FROM sites ORDER BY sort, rowid').all()).results.map((r, i) => ({
-    id: r.id,
-    name: r.name,
-    inverter: r.cloud,
-    account: Number(r.account) || 1,
-    params: parse(r.params),
-    primary: i === 0,
-  }));
   const devices = (await D.prepare('SELECT * FROM devices ORDER BY sort, rowid').all()).results.map((r) => ({
     id: r.id,
     type: r.type,
@@ -39,6 +31,20 @@ export async function loadConfig(env) {
     params: parse(r.params),
     auto: r.auto !== 0,
   }));
+  // A site reads the grid through its source inverter; the inverter's cloud details are
+  // copied onto the site so the automation does not need to look them up.
+  const sites = (await D.prepare('SELECT * FROM sites ORDER BY sort, rowid').all()).results.map((r, i) => {
+    const src = devices.find((d) => d.id === r.source && d.type === 'inverter');
+    return {
+      id: r.id,
+      name: r.name,
+      source: src?.id || null,
+      inverter: src?.params.cloud || null,
+      account: Number(src?.params.account) || 1,
+      params: src ? src.params : {},
+      primary: i === 0,
+    };
+  });
   const settings = Object.fromEntries(
     (await D.prepare("SELECT k, v FROM kv WHERE k LIKE 'cfg.%'").all()).results.map((r) => [r.k.slice(4), r.v])
   );
@@ -69,26 +75,24 @@ async function nextSort(env) {
 /* ---------- sites ---------- */
 
 /** @returns {Promise<string>} id of the new site */
-export async function addSite(env, { name, inverter, account = 1, params = {} }) {
+export async function addSite(env, { name }) {
   const id = await nextId(env, 'sites', 's');
   await (
     await db(env)
   )
-    .prepare('INSERT INTO sites (id,name,cloud,account,params,sort) VALUES (?,?,?,?,?,?)')
-    .bind(id, name, inverter, account, JSON.stringify(params), await nextSort(env))
+    .prepare("INSERT INTO sites (id,name,account,params,sort) VALUES (?,?,1,'{}',?)")
+    .bind(id, name, await nextSort(env))
     .run();
   await loadConfig(env);
   return id;
 }
 
+/** @param {{name?: string, source?: string | null}} fields */
 export async function updateSite(env, id, fields) {
   const D = await db(env);
   if (fields.name !== undefined) await D.prepare('UPDATE sites SET name=? WHERE id=?').bind(fields.name, id).run();
-  if (fields.inverter !== undefined) {
-    await D.prepare('UPDATE sites SET cloud=?, account=?, params=? WHERE id=?')
-      .bind(fields.inverter, fields.account || 1, JSON.stringify(fields.params || {}), id)
-      .run();
-  }
+  if (fields.source !== undefined)
+    await D.prepare('UPDATE sites SET source=? WHERE id=?').bind(fields.source, id).run();
   await loadConfig(env);
 }
 
@@ -117,6 +121,17 @@ export async function addDevice(env, { type, name, icon, site, params = {}, auto
   return id;
 }
 
+/**
+ * Every site reads its grid from one of its own inverters: after an inverter is moved or
+ * removed, a site left without one takes its first remaining inverter.
+ */
+async function fixSources(D) {
+  await D.prepare(
+    `UPDATE sites SET source = (SELECT d.id FROM devices d WHERE d.type='inverter' AND d.site=sites.id ORDER BY d.sort, d.rowid LIMIT 1)
+     WHERE source IS NULL OR source NOT IN (SELECT d.id FROM devices d WHERE d.type='inverter' AND d.site=sites.id)`
+  ).run();
+}
+
 export async function updateDevice(env, id, fields) {
   const D = await db(env);
   for (const [k, v] of Object.entries(fields)) {
@@ -125,12 +140,14 @@ export async function updateDevice(env, id, fields) {
       .bind(k === 'auto' ? (v ? 1 : 0) : v, id)
       .run();
   }
+  if (fields.site !== undefined) await fixSources(D);
   await loadConfig(env);
 }
 
 export async function deleteDevice(env, id, reload = true) {
   const D = await db(env);
   await D.prepare('DELETE FROM devices WHERE id=?').bind(id).run();
+  await fixSources(D);
   await D.prepare('DELETE FROM user_devices WHERE device=?').bind(id).run();
   if (reload) await loadConfig(env);
 }

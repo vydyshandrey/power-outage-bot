@@ -6,7 +6,7 @@
  * text, an inverter number) the expected input is kept in kv "await:<chat id>".
  */
 
-import { DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
+import { CATEGORIES, DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
 import { db, kvGet, kvSet } from './db.js';
 import { listDevices, missingDeviceSecrets } from './devices.js';
 import { CLOUDS, listInverters, missingSecrets, probeInverter, secretNames } from './inverter.js';
@@ -80,34 +80,62 @@ function mainMenu() {
   };
 }
 
-const cloudLabel = (site) =>
-  site.inverter === 'dess' && site.params.platform === 'shinemonitor' ? 'SmartClient' : CLOUDS[site.inverter].name;
+/** The app a person sees the inverter in: what the bot calls its cloud. */
+const cloudLabel = (p) =>
+  p.cloud === 'dess' && p.platform === 'shinemonitor' ? 'SmartClient' : CLOUDS[p.cloud]?.name || p.cloud;
+
+const invertersOf = (env, siteId) => devicesOf(env).filter((d) => d.type === 'inverter' && d.site === siteId);
+const siteOf = (env, id) => sitesOf(env).find((s) => s.id === id);
 
 function sitesList(env) {
-  const kb = sitesOf(env).map((s) => [{ text: `⚡ ${s.name} · ${cloudLabel(s)}`, callback_data: `s:so:${s.id}` }]);
+  const kb = sitesOf(env).map((s) => {
+    const src = devicesOf(env).find((d) => d.id === s.source);
+    return [
+      { text: `🏠 ${s.name}${src ? ` · ${src.icon} ${src.name}` : ' · без інвертора'}`, callback_data: `s:so:${s.id}` },
+    ];
+  });
   kb.push([{ text: "➕ Додати об'єкт", callback_data: 's:sa' }], back('s:m'));
-  return { text: "<b>🏠 Об'єкти</b>\nМісця з інверторами: дім, майстерня, дача.", kb };
+  return {
+    text: "<b>🏠 Об'єкти</b>\nМісця: дім, майстерня, дача. Кожен бере стан світла зі свого інвертора.",
+    kb,
+  };
 }
 
 function siteCard(env, id) {
-  const s = sitesOf(env).find((x) => x.id === id);
+  const s = siteOf(env, id);
   if (!s) return sitesList(env);
+  const src = devicesOf(env).find((d) => d.id === s.source);
   const lines = [
-    `<b>⚡ ${esc(s.name)}</b>`,
-    `Хмара: ${cloudLabel(s)}${s.account > 1 ? `, акаунт ${s.account}` : ''}`,
-    `Інвертор: ${esc(s.params.sn || 'не обрано')}`,
+    `<b>🏠 ${esc(s.name)}</b>`,
+    src
+      ? `Світло видно з: ${src.icon} ${esc(src.name)} (${cloudLabel(src.params)}, ${esc(src.params.sn || '—')})`
+      : 'Інвертора ще немає: бот не знає, чи є тут світло.',
   ];
   const devs = devicesOf(env).filter((d) => d.site === id);
   if (devs.length) lines.push(`Пристрої: ${devs.map((d) => `${d.icon} ${esc(d.name)}`).join(', ')}`);
+  const kb = [
+    [
+      { text: '✏️ Назва', callback_data: `s:sn:${id}` },
+      { text: '➕ Інвертор', callback_data: `s:ia:${id}` },
+    ],
+  ];
+  if (invertersOf(env, id).length > 1) kb.push([{ text: '⚡ Звідки брати світло', callback_data: `s:si:${id}` }]);
+  kb.push([{ text: '🗑 Видалити', callback_data: `s:sd:${id}` }], back('s:sl'));
+  return { text: lines.join(NL), kb };
+}
+
+function sourceMenu(env, id) {
+  const s = siteOf(env, id);
   return {
-    text: lines.join(NL),
+    text: `З якого інвертора брати стан світла для «${esc(s?.name || '')}»?`,
     kb: [
-      [
-        { text: '✏️ Назва', callback_data: `s:sn:${id}` },
-        { text: '🔄 Інвертор', callback_data: `s:si:${id}` },
-      ],
-      [{ text: '🗑 Видалити', callback_data: `s:sd:${id}` }],
-      back('s:sl'),
+      ...invertersOf(env, id).map((d) => [
+        {
+          text: `${d.id === s?.source ? '✅ ' : ''}${d.icon} ${d.name} · ${d.params.sn || cloudLabel(d.params)}`,
+          callback_data: `s:sS:${id}:${d.id}`,
+        },
+      ]),
+      back(`s:so:${id}`),
     ],
   };
 }
@@ -119,10 +147,13 @@ const CLOUD_CHOICES = [
   { key: 'valueclouds', label: 'SmartValue' },
 ];
 
-function cloudMenu() {
+function cloudMenu(siteId) {
   return {
     text: 'Яким застосунком ти дивишся цей інвертор?',
-    kb: [...CLOUD_CHOICES.map((c) => [{ text: c.label, callback_data: `s:sc:${c.key}` }]), back('s:sl')],
+    kb: [
+      ...CLOUD_CHOICES.map((c) => [{ text: c.label, callback_data: `s:sc:${c.key}` }]),
+      back(siteId ? `s:so:${siteId}` : 's:sl'),
+    ],
   };
 }
 
@@ -156,26 +187,34 @@ function devicesList(env) {
 function deviceCardSettings(env, id) {
   const d = devicesOf(env).find((x) => x.id === id);
   if (!d) return devicesList(env);
-  const site = sitesOf(env).find((s) => s.id === d.site);
-  return {
-    text: [
-      `<b>${d.icon} ${esc(d.name)}</b>`,
-      `Об'єкт: ${esc(site?.name || '—')}`,
-      `Автоматика: ${d.auto ? 'вимикати, коли зникає світло' : 'не чіпати'}`,
-    ].join(NL),
-    kb: [
-      [
-        { text: '✏️ Назва', callback_data: `s:dn:${id}` },
-        { text: '😀 Значок', callback_data: `s:di:${id}` },
-      ],
-      [
-        { text: "📍 Об'єкт", callback_data: `s:ds:${id}` },
-        { text: d.auto ? '🤖 Автоматика: так' : '🤖 Автоматика: ні', callback_data: `s:dA:${id}` },
-      ],
-      [{ text: '🗑 Видалити', callback_data: `s:dd:${id}` }],
-      back('s:dl'),
+  const site = siteOf(env, d.site);
+  const lines = [
+    `<b>${d.icon} ${esc(d.name)}</b>`,
+    `Категорія: ${CATEGORIES[DEVICE_TYPES[d.type]?.category]?.name || d.type}`,
+    `Об'єкт: ${esc(site?.name || '—')}`,
+  ];
+  const kb = [
+    [
+      { text: '✏️ Назва', callback_data: `s:dn:${id}` },
+      { text: '😀 Значок', callback_data: `s:di:${id}` },
     ],
-  };
+  ];
+  if (d.type === 'inverter') {
+    lines.push(
+      `Хмара: ${cloudLabel(d.params)}${d.params.account > 1 ? `, акаунт ${d.params.account}` : ''}`,
+      `Номер: ${esc(d.params.sn || '—')}`,
+      site?.source === id ? "Звідси бот бере стан світла об'єкта." : "Стан світла об'єкта береться з іншого інвертора."
+    );
+    kb.push([{ text: "📍 Об'єкт", callback_data: `s:ds:${id}` }]);
+  } else {
+    lines.push(`Автоматика: ${d.auto ? 'вимикати, коли зникає світло' : 'не чіпати'}`);
+    kb.push([
+      { text: "📍 Об'єкт", callback_data: `s:ds:${id}` },
+      { text: d.auto ? '🤖 Автоматика: так' : '🤖 Автоматика: ні', callback_data: `s:dA:${id}` },
+    ]);
+  }
+  kb.push([{ text: '🗑 Видалити', callback_data: `s:dd:${id}` }], back('s:dl'));
+  return { text: lines.join(NL), kb };
 }
 
 function templatesList(env) {
@@ -260,6 +299,7 @@ function repoMenu(env) {
 
 /** After the cloud and account are chosen: check secrets, then list inverters or ask for numbers. */
 async function pickInverter(env, chat, state, cq) {
+  const backTo = `s:so:${state.siteId}`;
   const missing = missingSecrets(env, state.cloud, state.account);
   if (missing.length) {
     const text = [
@@ -268,7 +308,7 @@ async function pickInverter(env, chat, state, cq) {
       '',
       'Після цього натисни «Перевірити».',
     ].join(NL);
-    return edit(env, cq, text, [[{ text: '🔄 Перевірити', callback_data: `s:sk:${state.account}` }], back('s:sl')]);
+    return edit(env, cq, text, [[{ text: '🔄 Перевірити', callback_data: `s:sk:${state.account}` }], back(backTo)]);
   }
   let found;
   try {
@@ -276,7 +316,7 @@ async function pickInverter(env, chat, state, cq) {
   } catch (e) {
     return edit(env, cq, `Не вдалося увійти в хмару: ${esc(e.message)}`, [
       [{ text: '🔄 Спробувати ще', callback_data: `s:sk:${state.account}` }],
-      back('s:sl'),
+      back(backTo),
     ]);
   }
   if (found === null) {
@@ -288,7 +328,13 @@ async function pickInverter(env, chat, state, cq) {
       'Відкрий у SmartValue пристрій → «Деталі пристрою».\nНадішли <b>PN</b>.'
     );
   }
-  if (!found.length) return edit(env, cq, 'У цьому акаунті інверторів не знайдено.', [back('s:sl')]);
+  const taken = new Set(
+    devicesOf(env)
+      .filter((d) => d.type === 'inverter')
+      .map((d) => d.params.sn)
+  );
+  found = found.filter((f) => !taken.has(f.params.sn));
+  if (!found.length) return edit(env, cq, 'Нових інверторів у цьому акаунті не знайдено.', [back(backTo)]);
   await setAwait(env, chat, { ...state, kind: 'pick', found });
   return edit(
     env,
@@ -298,14 +344,21 @@ async function pickInverter(env, chat, state, cq) {
   );
 }
 
-/** Stores the chosen inverter: a new site or a new inverter for an existing one. */
+/** Stores the chosen inverter as a device of the site; the site's first inverter shows its grid. */
 async function saveInverter(env, chat, state, params) {
   await clearAwait(env, chat);
-  const fields = { inverter: state.cloud, account: state.account, params };
-  let id = state.siteId;
-  if (id) await updateSite(env, id, fields);
-  else id = await addSite(env, { name: state.name, ...fields });
-  const card = siteCard(env, id);
+  const site = siteOf(env, state.siteId);
+  if (!site) return send(env, chat, "Об'єкт уже видалено.");
+  const id = await addDevice(env, {
+    type: 'inverter',
+    name: DEVICE_TYPES.inverter.name,
+    icon: DEVICE_TYPES.inverter.icon,
+    site: site.id,
+    params: { cloud: state.cloud, account: state.account, ...(state.extra || {}), ...params },
+    auto: false,
+  });
+  if (!site.source) await updateSite(env, site.id, { source: id });
+  const card = siteCard(env, site.id);
   return send(env, chat, `✅ Збережено.${NL}${NL}${card.text}`, { reply_markup: { inline_keyboard: card.kb } });
 }
 
@@ -335,9 +388,12 @@ export async function onSettingsText(env, msg, user) {
 
   switch (state.kind) {
     case 'site_new_name': {
-      await setAwait(env, chat, { kind: 'site_new', name: text.slice(0, 40) });
-      const m = cloudMenu();
-      await send(env, chat, m.text, { reply_markup: { inline_keyboard: m.kb } });
+      const id = await addSite(env, { name: text.slice(0, 40) });
+      await setAwait(env, chat, { kind: 'inv_new', siteId: id });
+      const m = cloudMenu(id);
+      await send(env, chat, `✅ Об'єкт «${esc(text.slice(0, 40))}» додано. Тепер його інвертор.${NL}${NL}${m.text}`, {
+        reply_markup: { inline_keyboard: m.kb },
+      });
       return true;
     }
     case 'site_name': {
@@ -363,7 +419,7 @@ export async function onSettingsText(env, msg, user) {
       } catch (e) {
         await clearAwait(env, chat);
         await send(env, chat, `Не вдалося прочитати інвертор: ${esc(e.message)}. Перевір номери й спробуй ще раз.`, {
-          reply_markup: { inline_keyboard: [back('s:sl')] },
+          reply_markup: { inline_keyboard: [back(`s:so:${state.siteId}`)] },
         });
       }
       return true;
@@ -471,9 +527,15 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
     case 'sn':
       await ask(env, chat, { kind: 'site_name', id: a }, "Нова назва об'єкта:");
       return done();
+    case 'ia':
+      if (!siteOf(env, a)) return show(sitesList(env));
+      await setAwait(env, chat, { kind: 'inv_new', siteId: a });
+      return show(cloudMenu(a));
     case 'si':
-      await setAwait(env, chat, { kind: 'site_new', siteId: a });
-      return show(cloudMenu());
+      return show(sourceMenu(env, a));
+    case 'sS':
+      if (invertersOf(env, a).some((d) => d.id === b)) await updateSite(env, a, { source: b });
+      return show(siteCard(env, a));
     case 'sc': {
       const cloud = a === 'shine' ? 'dess' : a;
       const extra = a === 'shine' ? { platform: 'shinemonitor' } : {};
@@ -481,7 +543,7 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
       return show(accountMenu(cloud));
     }
     case 'sk':
-      if (!state.cloud) return show(sitesList(env));
+      if (!state.cloud || !state.siteId) return show(sitesList(env));
       await setAwait(env, chat, { ...state, account: Number(a) || 1 });
       await pickInverter(env, chat, { ...state, account: Number(a) || 1 }, cq);
       return done();
@@ -518,10 +580,18 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
         text: 'Який пристрій?',
         kb: [
           ...Object.entries(DEVICE_TYPES).map(([k, t]) => [
-            { text: `${t.icon} ${t.name} Midea`, callback_data: `s:dt:${k}` },
+            {
+              text: `${t.icon} ${t.name}${t.vendor ? ` ${t.vendor}` : ''}`,
+              callback_data: k === 'inverter' ? 's:dI' : `s:dt:${k}`,
+            },
           ]),
           back('s:dl'),
         ],
+      });
+    case 'dI':
+      return show({
+        text: "На якому об'єкті цей інвертор?",
+        kb: [...sitesOf(env).map((s) => [{ text: `🏠 ${s.name}`, callback_data: `s:ia:${s.id}` }]), back('s:da')],
       });
     case 'dt': {
       const missing = missingDeviceSecrets(env, a);
@@ -560,7 +630,7 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
       await setAwait(env, chat, { ...state, chosen: f });
       return show({
         text: "До якого об'єкта він належить? Коли там зникне світло, бот його вимкне.",
-        kb: sitesOf(env).map((s) => [{ text: `⚡ ${s.name}`, callback_data: `s:dP:${s.id}` }]),
+        kb: sitesOf(env).map((s) => [{ text: `🏠 ${s.name}`, callback_data: `s:dP:${s.id}` }]),
       });
     }
     case 'dP': {
@@ -586,7 +656,7 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
       return show({
         text: "До якого об'єкта належить пристрій?",
         kb: [
-          ...sitesOf(env).map((s) => [{ text: `⚡ ${s.name}`, callback_data: `s:dS:${a}:${s.id}` }]),
+          ...sitesOf(env).map((s) => [{ text: `🏠 ${s.name}`, callback_data: `s:dS:${a}:${s.id}` }]),
           back(`s:do:${a}`),
         ],
       });
@@ -595,12 +665,19 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
       return show(deviceCardSettings(env, a));
     case 'dA': {
       const d = devicesOf(env).find((x) => x.id === a);
-      if (d) await updateDevice(env, a, { auto: !d.auto });
+      if (d && d.type !== 'inverter') await updateDevice(env, a, { auto: !d.auto });
       return show(deviceCardSettings(env, a));
     }
     case 'dd':
       return show({
-        text: 'Видалити пристрій з бота? Сам пристрій і його історія не постраждають.',
+        text: [
+          'Видалити пристрій з бота? Сам пристрій і його історія не постраждають.',
+          sitesOf(env).some((s) => s.source === a && invertersOf(env, s.id).length === 1)
+            ? "Об'єкт лишиться без джерела стану світла, поки не додаси інший інвертор."
+            : '',
+        ]
+          .filter(Boolean)
+          .join(NL),
         kb: [
           [
             { text: '🗑 Так, видалити', callback_data: `s:dD:${a}` },

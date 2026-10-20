@@ -26,7 +26,13 @@ function blank() {
   return w;
 }
 
-test('upgrade to v5: what was in wrangler.toml becomes settings in the database', async () => {
+const inverters = (w) =>
+  w.db
+    .prepare("SELECT id, site, params FROM devices WHERE type='inverter' ORDER BY sort, rowid")
+    .all()
+    .map((d) => ({ ...d, params: JSON.parse(d.params) }));
+
+test('upgrade: what was in wrangler.toml becomes settings, inverters become devices', async () => {
   const w = createWorld();
   Object.assign(w.env, {
     SITES: JSON.stringify([
@@ -39,15 +45,24 @@ test('upgrade to v5: what was in wrangler.toml becomes settings in the database'
     VC_DEVADDR: '4',
   });
   await w.tick();
-  const sites = w.db.prepare('SELECT id, name, cloud, params FROM sites ORDER BY sort').all();
+  const sites = w.db.prepare('SELECT id, name, source FROM sites ORDER BY sort').all();
   assert.deepEqual(
-    sites.map((s) => [s.id, s.name, s.cloud, JSON.parse(s.params)]),
+    sites.map((s) => [s.id, s.name, s.source]),
     [
-      ['home', 'Дім', 'deye', { sn: 'SN1' }],
-      ['shop', 'Майстерня', 'valueclouds', { pn: 'I300', sn: 'DEV1', devcode: '6422', devaddr: '4' }],
+      ['home', 'Дім', 'i1'],
+      ['shop', 'Майстерня', 'i2'],
     ]
   );
-  const dev = w.db.prepare('SELECT * FROM devices').get();
+  assert.deepEqual(inverters(w), [
+    { id: 'i1', site: 'home', params: { cloud: 'deye', account: 1, sn: 'SN1' } },
+    {
+      id: 'i2',
+      site: 'shop',
+      params: { cloud: 'valueclouds', account: 1, pn: 'I300', sn: 'DEV1', devcode: '6422', devaddr: '4' },
+    },
+  ]);
+  assert.equal(w.kv('schema_v'), '6');
+  const dev = w.db.prepare("SELECT * FROM devices WHERE type='midea_boiler'").get();
   assert.equal(dev.id, 'boiler');
   assert.equal(JSON.parse(dev.params).device_id, '100000000000001');
   assert.equal(w.kv('cfg.tz'), 'Europe/Kyiv');
@@ -74,7 +89,7 @@ test('renaming a site changes the notifications', async () => {
   await w.tick();
   await w.press(ADMIN, 's:sn:home');
   await w.say(ADMIN, 'Квартира');
-  w.db.exec(`INSERT INTO sites (id,name,cloud,account,params,sort) VALUES ('s9','Дача','deye',1,'{}',9)`);
+  w.db.exec(`INSERT INTO sites (id,name,account,params,sort) VALUES ('s9','Дача',1,'{}',9)`);
   await w.press(ADMIN, 's:sl'); // reload happens per request anyway
   w.step(120);
   w.grid = false;
@@ -87,6 +102,7 @@ test('adding a SmartESS site in the bot: name → app → account → pick the i
   const asked = await w.press(ADMIN, 's:sa');
   assert.match(asked[0].text, /Як назвати об'єкт/);
   const apps = await w.say(ADMIN, 'Квартира мами');
+  assert.match(apps[0].text, /додано/);
   assert.ok(buttons(apps).some((b) => b.callback_data === 's:sc:dess'));
   await w.press(ADMIN, 's:sc:dess');
 
@@ -100,9 +116,16 @@ test('adding a SmartESS site in the bot: name → app → account → pick the i
   const saved = await w.press(ADMIN, 's:sp:0');
   assert.ok(textsTo(saved, ADMIN).some((t) => t.startsWith('✅ Збережено') && t.includes('Квартира мами')));
 
-  const site = w.db.prepare('SELECT * FROM sites').get();
-  assert.equal(site.cloud, 'dess');
-  assert.equal(JSON.parse(site.params).sn, '96342210100001');
+  const [inv] = inverters(w);
+  assert.equal(inv.params.cloud, 'dess');
+  assert.equal(inv.params.sn, '96342210100001');
+  assert.equal(w.db.prepare('SELECT source FROM sites').get().source, inv.id);
+
+  // The same inverter is not offered twice.
+  await w.press(ADMIN, `s:ia:${inv.site}`);
+  await w.press(ADMIN, 's:sc:dess');
+  const again = await w.press(ADMIN, 's:sk:1');
+  assert.match(again[0].text, /Нових інверторів/);
 
   await w.tick();
   w.step(120);
@@ -127,8 +150,14 @@ test('adding a SmartValue site: numbers from the app, protocol found by the bot'
   await w.say(ADMIN, '-');
   const done = await w.say(ADMIN, '-');
   assert.ok(textsTo(done, ADMIN).some((t) => t.startsWith('✅ Інвертор відповідає: мережа є, батарея 77%')));
-  const params = JSON.parse(w.db.prepare('SELECT params FROM sites').get().params);
-  assert.deepEqual(params, { pn: 'I30000230600000000', sn: '0000000001', devcode: '6409', devaddr: '255' });
+  assert.deepEqual(inverters(w)[0].params, {
+    cloud: 'valueclouds',
+    account: 1,
+    pn: 'I30000230600000000',
+    sn: '0000000001',
+    devcode: '6409',
+    devaddr: '255',
+  });
 });
 
 test('adding a boiler in the bot, then automation switches it off', async () => {
@@ -139,7 +168,7 @@ test('adding a boiler in the bot, then automation switches it off', async () => 
   assert.equal(buttons(list)[0].text, 'Бойлер');
   const where = await w.press(ADMIN, 's:dp:0');
   await pressFirst(w, where, 's:dP:');
-  const dev = w.db.prepare('SELECT * FROM devices').get();
+  const dev = w.db.prepare("SELECT * FROM devices WHERE type='midea_boiler'").get();
   assert.equal(dev.id, 'boiler');
   assert.equal(dev.site, 'home');
 
@@ -216,4 +245,43 @@ test('entities typed in Telegram become HTML', () => {
     ]),
     '<b>Світло</b> &lt;є&gt; <code>{time}</code>'
   );
+});
+
+test('a second inverter on a site: the admin picks which one shows the grid; removing it falls back', async () => {
+  const w = createWorld();
+  Object.assign(w.env, { DESS_USER, DESS_PASSWORD });
+  await w.tick();
+  const types = await w.press(ADMIN, 's:da');
+  assert.ok(buttons(types).some((b) => b.callback_data === 's:dI'));
+  const where = await w.press(ADMIN, 's:dI');
+  await pressFirst(w, where, 's:ia:home');
+  await w.press(ADMIN, 's:sc:dess');
+  await w.press(ADMIN, 's:sk:1');
+  await w.press(ADMIN, 's:sp:0');
+  const [first, second] = inverters(w);
+  assert.equal(w.db.prepare("SELECT source FROM sites WHERE id='home'").get().source, first.id, 'source kept');
+
+  const card = await w.press(ADMIN, 's:so:home');
+  assert.ok(buttons(card).some((b) => b.callback_data === 's:si:home'));
+  await w.press(ADMIN, `s:sS:home:${second.id}`);
+  assert.equal(w.db.prepare("SELECT source FROM sites WHERE id='home'").get().source, second.id);
+
+  await w.press(ADMIN, `s:dD:${second.id}`);
+  assert.equal(w.db.prepare("SELECT source FROM sites WHERE id='home'").get().source, first.id);
+});
+
+test('an inverter is not a switch: no automation, no control buttons, not in the access screen', async () => {
+  const w = createWorld();
+  await w.tick();
+  const [inv] = inverters(w);
+  const card = await w.press(ADMIN, `s:do:${inv.id}`);
+  assert.ok(!buttons(card).some((b) => b.callback_data.startsWith('s:dA')));
+  const res = await w.press(ADMIN, `dc:${inv.id}:off`);
+  assert.ok(textsTo(res, 'answer').includes('Лише перегляд'));
+  const access = await w.press(ADMIN, `pd:${MEMBER}`);
+  assert.ok(
+    buttons(access).some((b) => b.callback_data.includes('boiler')),
+    'screen shown'
+  );
+  assert.ok(!buttons(access).some((b) => b.callback_data.includes(inv.id)));
 });

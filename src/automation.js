@@ -16,6 +16,7 @@ import {
   ON_DELAY_SEC,
   STALE_SEC,
   VERSION,
+  controllable,
   devicesOf,
   siteKey,
   sitesOf,
@@ -141,7 +142,7 @@ async function checkStale(env, site, reading) {
 /* ---------- grid transitions ---------- */
 
 /** Automated devices of a site. */
-const automated = (env, site) => devicesOf(env).filter((d) => d.site === site.id && d.auto);
+const automated = (env, site) => devicesOf(env).filter((d) => d.site === site.id && d.auto && controllable(d));
 
 /** Records a grid change, notifies the site's viewers and opens the device tasks. */
 async function onGridChange(env, site, prev, d) {
