@@ -22,6 +22,7 @@
 | --------- | ---------------------------------------------------------------------------------------------------------------------------- |
 | Інвертори | Deye з доступом через DeyeCloud                                                                                              |
 | Інвертори | з Wi-Fi-модулем, які працюють через SmartESS, WatchPower та інші застосунки DESS Monitor (MUST, Anenji, PowMr, Axpert тощо)¹ |
+| Інвертори | із застосунком SmartValue (наприклад, MUST PV18 з модулем WFBLE.DTU.PlugPro)¹                                                |
 | Пристрої  | бойлери Midea, якими керують через застосунок SmartHome                                                                      |
 
 ¹ Перевірено на тестах з імітацією хмари; перше встановлення на живому обладнанні ще попереду.
@@ -57,18 +58,18 @@
 
 ### Структура коду
 
-| Файл                         | Відповідає за                                                                |
-| ---------------------------- | ---------------------------------------------------------------------------- |
-| `src/index.js`               | вхідна точка: маршрути HTTP, вебхук Telegram, розклад                        |
-| `src/automation.js`          | перевірка кожні 2 хв: стан мережі, вимкнення й увімкнення бойлера, ескалації |
-| `src/bot.js`                 | повідомлення й кнопки в Telegram, ролі та права                              |
-| `src/reports.js`             | статус, картка пристрою, історія, звіт про відключення                       |
-| `src/inverter.js`            | вибір джерела даних інвертора за змінною `INVERTER`                          |
-| `src/deye.js`, `src/dess.js` | клієнти хмар Deye та DESS Monitor                                            |
-| `src/midea.js`               | клієнт хмари Midea                                                           |
-| `src/db.js`                  | сховище D1: стан, користувачі, права, журнал подій                           |
-| `src/config.js`              | пороги й параметри в одному місці                                            |
-| `test/`                      | 32 сценарії на імітації хмар і Telegram, без мережі                          |
+| Файл                                               | Відповідає за                                                                |
+| -------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `src/index.js`                                     | вхідна точка: маршрути HTTP, вебхук Telegram, розклад                        |
+| `src/automation.js`                                | перевірка кожні 2 хв: стан мережі, вимкнення й увімкнення бойлера, ескалації |
+| `src/bot.js`                                       | повідомлення й кнопки в Telegram, ролі та права                              |
+| `src/reports.js`                                   | статус, картка пристрою, історія, звіт про відключення                       |
+| `src/inverter.js`                                  | вибір джерела даних інвертора за змінною `INVERTER`                          |
+| `src/deye.js`, `src/dess.js`, `src/valueclouds.js` | клієнти хмар Deye, DESS Monitor і ValueClouds (SmartValue)                   |
+| `src/midea.js`                                     | клієнт хмари Midea                                                           |
+| `src/db.js`                                        | сховище D1: стан, користувачі, права, журнал подій                           |
+| `src/config.js`                                    | пороги й параметри в одному місці                                            |
+| `test/`                                            | 38 сценаріїв на імітації хмар і Telegram, без мережі                         |
 
 Налаштування дому зберігаються в `wrangler.toml` (тип і номер інвертора, бойлер, часовий пояс). Паролі й токени — лише в секретах Cloudflare, у коді їх немає.
 
@@ -85,11 +86,11 @@ npm run dev      # локальний запуск (wrangler dev)
 **Чесні обмеження:**
 
 - Дані в хмарах інверторів оновлюються раз на кілька хвилин, тому реакція на зміну світла — кілька хвилин.
-- API DESS Monitor неофіційний: підпис запитів зроблено за відкритою інтеграцією [ha-dessmonitor](https://github.com/andreas-glaser/ha-dessmonitor).
+- API DESS Monitor і ValueClouds неофіційні: запити зроблено за відкритими інтеграціями [ha-dessmonitor](https://github.com/andreas-glaser/ha-dessmonitor) і [ha-mutatrack](https://github.com/vtechs-ja/ha-mutatrack).
 - Доступ до Midea неофіційний: так працюють і відкриті бібліотеки для Home Assistant. Хмара Midea інколи збоїть, бот це переживає повторами.
 
 ---
 
-**English summary.** A free, serverless Telegram bot (Cloudflare Workers + D1) for power outages. When the grid goes down it switches off appliances that drain the inverter battery; when power has been stable for 5 minutes it switches them back on and reports the status. It shows status on a button, lets you control devices from the phone, never overrides a manual switch-off, and has per-user, per-device permissions. Works today with Deye inverters (DeyeCloud), inverters on the DESS Monitor / ShineMonitor cloud (SmartESS, WatchPower and rebranded apps: MUST, Anenji, PowMr, Axpert) and Midea water heaters (SmartHome); more models are added as needed. Deploy it manually or ask an AI assistant to follow [AGENTS.md](AGENTS.md).
+**English summary.** A free, serverless Telegram bot (Cloudflare Workers + D1) for power outages. When the grid goes down it switches off appliances that drain the inverter battery; when power has been stable for 5 minutes it switches them back on and reports the status. It shows status on a button, lets you control devices from the phone, never overrides a manual switch-off, and has per-user, per-device permissions. Works today with Deye inverters (DeyeCloud), inverters on the DESS Monitor / ShineMonitor cloud (SmartESS, WatchPower and rebranded apps: MUST, Anenji, PowMr, Axpert), inverters in the SmartValue app (ValueClouds) and Midea water heaters (SmartHome); more models are added as needed. Deploy it manually or ask an AI assistant to follow [AGENTS.md](AGENTS.md).
 
 Автор: Андрій Видиш. Ліцензія: [MIT](LICENSE).

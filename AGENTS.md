@@ -27,6 +27,7 @@ Telegram-бот на Cloudflare Workers (безкоштовний тариф).
   - DeyeCloud → гілка Deye (`INVERTER = "deye"`).
   - SmartESS, WatchPower, Energy-Mate або інший, що входить на dessmonitor.com тим самим логіном → гілка DESS (`INVERTER = "dess"`).
   - SmartClient for Solar → теж DESS, але з `DESS_PLATFORM = "shinemonitor"`.
+  - SmartValue → гілка SmartValue (`INVERTER = "valueclouds"`). Номер Wi-Fi-модуля тут має 18 символів, на dessmonitor.com такий акаунт не входить.
   - Інший застосунок → цей інвертор поки не підтримується.
 - Чи є бойлер Midea, яким вона керує через застосунок SmartHome (MSmartHome)? Без нього бот працюватиме лише як сповіщення про світло: просто лиши `MIDEA_DEVICE_ID` порожнім.
 - Чи є акаунти GitHub і Cloudflare? Якщо ні, людина створить їх на кроці 4.
@@ -51,6 +52,13 @@ Telegram-бот на Cloudflare Workers (безкоштовний тариф).
 2. Секрети на кроці 6: `DESS_USER` і `DESS_PASSWORD`.
 3. У `wrangler.toml` на кроці 7: `INVERTER = "dess"` і значення `DESS_*` з `/discover`.
 4. API DESS Monitor неофіційний. Якщо вхід не проходить, перевір, що людина заходить з цим логіном на [dessmonitor.com](https://www.dessmonitor.com/) у браузері.
+
+### Гілка SmartValue
+
+1. Бот входить логіном і паролем від застосунку SmartValue. Секрети на кроці 6: `VC_USER` і `VC_PASSWORD`.
+2. У `wrangler.toml`: `INVERTER = "valueclouds"`, `VC_PN` — номер з наклейки Wi-Fi-модуля, `VC_SN` — серійний номер інвертора (наклейка на інверторі або дані пристрою в застосунку).
+3. Списку пристроїв ця платформа не віддає, тому `/discover` перевіряє вхід і сам підбирає `VC_DEVCODE` і `VC_DEVADDR` для цих двох номерів. Знайдені значення впиши в `wrangler.toml`.
+4. Якщо `/discover` не підібрав пару: людина входить на [valueclouds.com](https://www.valueclouds.com/) з комп'ютера, відкриває інструменти розробника → Network і шукає запит `querySPDeviceLastData` або `queryDeviceOneDataxxx`. Потрібні значення `devcode` і `devaddr` є в його адресі.
 
 ## 3. Окремий акаунт Midea (робить людина)
 
@@ -94,6 +102,7 @@ npx wrangler deploy
 | `TG_BOT_TOKEN`                                                  | токен з кроку 1                                       |
 | `DEYE_APP_ID`, `DEYE_APP_SECRET`, `DEYE_EMAIL`, `DEYE_PASSWORD` | крок 2, гілка Deye                                    |
 | `DESS_USER`, `DESS_PASSWORD`                                    | крок 2, гілка DESS                                    |
+| `VC_USER`, `VC_PASSWORD`                                        | крок 2, гілка SmartValue                              |
 | `MIDEA_EMAIL`, `MIDEA_PASSWORD`                                 | крок 3                                                |
 | `ACCESS_KEY`                                                    | довгий випадковий рядок, 30+ символів; це ключ адміна |
 
