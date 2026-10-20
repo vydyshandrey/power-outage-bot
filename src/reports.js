@@ -1,6 +1,6 @@
 /** Read-only views shown in the bot: status, device card, history, outage report, device menu. */
 
-import { deviceById, sitesOf } from './config.js';
+import { controllable, deviceById, devicesOf, sitesOf } from './config.js';
 import { db, getPerm, kvGet, viewableDevices, viewableSites } from './db.js';
 import { K, gridDevice } from './automation.js';
 import { DK, deviceState } from './devices.js';
@@ -83,16 +83,20 @@ export async function deviceCard(env, user, id) {
   }
 
   const kb = [];
-  if (perm === 'control') {
+  if (perm === 'control' && controllable(dev)) {
     kb.push([
       { text: '🔥 Увімкнути', callback_data: `dc:${id}:on` },
       { text: '⛔ Вимкнути', callback_data: `dc:${id}:off` },
     ]);
   }
-  kb.push([
-    { text: '📜 Історія', callback_data: `h:${id}` },
-    { text: '🔄 Оновити', callback_data: `d:${id}` },
-  ]);
+  kb.push(
+    controllable(dev)
+      ? [
+          { text: '📜 Історія', callback_data: `h:${id}` },
+          { text: '🔄 Оновити', callback_data: `d:${id}` },
+        ]
+      : [{ text: '🔄 Оновити', callback_data: `d:${id}` }]
+  );
   kb.push([{ text: '⬅️ Пристрої', callback_data: 'dl' }]);
   return { text: lines.join(NL), kb };
 }
@@ -161,11 +165,18 @@ async function siteOutages(env, site, days, titled) {
 
 /** "🏠 Пристрої": devices the user may see. */
 export async function devicesMenu(env, user) {
-  const devs = await viewableDevices(env, user);
+  // Inverters are shown read-only to whoever sees their site; switchable devices by their own access.
+  const sites = new Set((await viewableSites(env, user)).map((s) => s.id));
+  const inverters = devicesOf(env).filter((d) => d.type === 'inverter' && sites.has(d.site));
+  const switchable = (await viewableDevices(env, user)).map((id) => deviceById(env, id));
+  const devs = sitesOf(env).flatMap((s) => [...inverters, ...switchable].filter((d) => d.site === s.id));
   if (!devs.length) return { text: 'Доступних пристроїв немає. Попроси адміністратора надати доступ.', kb: [] };
-  const kb = devs.map((id) => {
-    const d = deviceById(env, id);
-    return [{ text: `${d.icon} ${d.name}`, callback_data: `d:${id}` }];
-  });
+  const titled = sitesOf(env).length > 1;
+  const kb = devs.map((d) => [
+    {
+      text: `${d.icon} ${d.name}${titled ? ` · ${sitesOf(env).find((s) => s.id === d.site)?.name}` : ''}`,
+      callback_data: `d:${d.id}`,
+    },
+  ]);
   return { text: '<b>🏠 Пристрої</b>', kb };
 }

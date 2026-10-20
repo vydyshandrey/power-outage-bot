@@ -278,6 +278,14 @@ test('an inverter is not a switch: no automation, no control buttons, not in the
   assert.ok(!buttons(card).some((b) => b.callback_data.startsWith('s:dA')));
   const res = await w.press(ADMIN, `dc:${inv.id}:off`);
   assert.ok(textsTo(res, 'answer').includes('Лише перегляд'));
+  const menu = await w.say(MEMBER, '🏠 Пристрої');
+  assert.ok(
+    buttons(menu).some((b) => b.callback_data === `d:${inv.id}`),
+    'shown to those who see the site'
+  );
+  const view = await w.press(MEMBER, `d:${inv.id}`);
+  assert.match(view[0].text, /Батарея/);
+  assert.ok(!buttons(view).some((b) => b.callback_data.startsWith('dc:')));
   const access = await w.press(ADMIN, `pd:${MEMBER}`);
   assert.ok(
     buttons(access).some((b) => b.callback_data.includes('boiler')),
