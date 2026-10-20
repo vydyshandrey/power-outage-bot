@@ -69,12 +69,12 @@ export async function announce(env) {
   const newMinor = !prev.startsWith(minor);
   if (newMinor && USER_NOTES[minor]) {
     const text = [`🆕 Бот оновлено до v${VERSION}.`, ...USER_NOTES[minor]].join(NL);
-    await broadcast(env, text, 'user', (u) => ({ reply_markup: mainKeyboard(u.role) }));
+    await broadcast(env, text, 'user', (u) => ({ reply_markup: mainKeyboard(u.role, env) }));
     return;
   }
   const notes = newMinor ? ADMIN_NOTES[minor] || [] : [];
   await broadcast(env, [`🔧 Бот оновлено до v${VERSION}.`, ...notes].join(NL), 'admin', (u) => ({
-    reply_markup: mainKeyboard(u.role),
+    reply_markup: mainKeyboard(u.role, env),
   }));
 }
 

@@ -19,7 +19,8 @@ import { onSettingsCallback, onSettingsText, openSettings } from './settings.js'
 import { displayName } from './store.js';
 import { startUpdate } from './updates.js';
 import { deviceCard, deviceHistory, devicesMenu, outagesReport, statusText } from './reports.js';
-import { broadcastDevice, edit, mainKeyboard, send, tg } from './telegram.js';
+import { RELEASES_BUTTON, broadcastDevice, edit, mainKeyboard, seesReleases, send, tg } from './telegram.js';
+import { releasesView } from './releases.js';
 import { NL, now } from './util.js';
 
 const roleButtons = (uid) => [
@@ -46,12 +47,12 @@ async function handleStart(env, msg, user) {
       .bind(id, name, username, 'admin', 'approved', now())
       .run();
     return send(env, id, '✅ Ти адмін. Нові користувачі надсилатимуть запит на доступ, а схвалювати їх будеш ти.', {
-      reply_markup: mainKeyboard('admin'),
+      reply_markup: mainKeyboard('admin', env),
     });
   }
   if (user?.status === 'approved') {
     return send(env, id, `Ти вже маєш доступ: ${ROLES[user.role] || ROLES.user}.`, {
-      reply_markup: mainKeyboard(user.role),
+      reply_markup: mainKeyboard(user.role, env),
     });
   }
   if (user?.status === 'pending') return send(env, id, 'Запит уже надіслано, чекай на схвалення.');
@@ -90,7 +91,13 @@ export async function onMessage(env, msg) {
   }
   if (['/on', '/off', '🔥 Бойлер ON', '⛔ Бойлер OFF'].includes(text)) {
     // Buttons from v1.0.0 that may still be on someone's keyboard.
-    return send(env, id, 'Керування бойлером переїхало в «🏠 Пристрої».', { reply_markup: mainKeyboard(user.role) });
+    return send(env, id, 'Керування бойлером переїхало в «🏠 Пристрої».', {
+      reply_markup: mainKeyboard(user.role, env),
+    });
+  }
+  if ((text === '/changes' || text === RELEASES_BUTTON) && seesReleases(env, user.role)) {
+    const v = releasesView(0);
+    return send(env, id, v.text, v.kb.length ? { reply_markup: { inline_keyboard: v.kb } } : {});
   }
   if ((text === '/users' || text === '👥 Користувачі') && user.role === 'admin') {
     const m = await usersList(env);
@@ -101,7 +108,7 @@ export async function onMessage(env, msg) {
   if (await onSettingsText(env, msg, user)) return;
 
   const menu = `Меню внизу: 📊 Статус, 🏠 Пристрої${user.role === 'admin' ? ', 👥 Користувачі, ⚙️ Налаштування' : ''}.`;
-  return send(env, id, menu, { reply_markup: mainKeyboard(user.role) });
+  return send(env, id, menu, { reply_markup: mainKeyboard(user.role, env) });
 }
 
 /* ---------- callbacks ---------- */
@@ -160,7 +167,7 @@ async function handleAdmin(env, cq, me, act, a1, a2, done) {
     // A newly approved user, or an admin demoted to user, starts from "sees the first site";
     // an existing user keeps the access the admin already set.
     if (a2 === 'user' && !wasUser) await resetPerms(env, tid);
-    await send(env, tid, `✅ Доступ надано: ${ROLES[a2]}.`, { reply_markup: mainKeyboard(a2) });
+    await send(env, tid, `✅ Доступ надано: ${ROLES[a2]}.`, { reply_markup: mainKeyboard(a2, env) });
     if (a2 === 'user' && !wasUser) {
       const v = await openUserEditor(env, me.chat_id, tid);
       await edit(env, cq, `✅ ${userLabel(target)} → ${ROLES.user}${NL}${NL}${v.text}`, v.kb);
@@ -190,6 +197,12 @@ export async function onCallback(env, cq) {
 
   if (act === 'g') {
     await send(env, me.chat_id, await outagesReport(env, me, Number(a1) || 7));
+    return done();
+  }
+  if (act === 'rl') {
+    if (!seesReleases(env, me.role)) return done('Немає доступу');
+    const v = releasesView(Number(a1) || 0);
+    await edit(env, cq, v.text, v.kb);
     return done();
   }
   if (act === 'dl') {

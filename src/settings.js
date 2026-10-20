@@ -8,7 +8,7 @@
 
 import { userCard } from './access.js';
 import { CATEGORIES, DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
-import { db, kvGet, kvSet } from './db.js';
+import { db, kvGet, kvSet, usersBy } from './db.js';
 import { listDevices, missingDeviceSecrets } from './devices.js';
 import { CLOUDS, listInverters, missingSecrets, probeInverter, secretNames } from './inverter.js';
 import { TEMPLATES, VARS, fill, templateText, unknownVars } from './messages.js';
@@ -23,7 +23,7 @@ import {
   updateDevice,
   updateSite,
 } from './store.js';
-import { edit, send } from './telegram.js';
+import { RELEASES_BUTTON, edit, mainKeyboard, send } from './telegram.js';
 import { NL, esc } from './util.js';
 import { updateOffer } from './updates.js';
 
@@ -63,7 +63,7 @@ export function entitiesToHtml(text, entities = []) {
 
 /* ---------- screens ---------- */
 
-function mainMenu() {
+function mainMenu(env) {
   return {
     text: '<b>⚙️ Налаштування</b>',
     kb: [
@@ -75,6 +75,12 @@ function mainMenu() {
         { text: '🔗 Репозиторій', callback_data: 's:rp' },
       ],
       [{ text: '⬆️ Оновлення', callback_data: 's:up' }],
+      [
+        {
+          text: env.CFG?.settings?.releases === 'all' ? '🚀 Що нового: бачать усі' : '🚀 Що нового: лише адміни',
+          callback_data: 's:rv',
+        },
+      ],
     ],
   };
 }
@@ -498,7 +504,7 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
   switch (act) {
     case 'm':
       await clearAwait(env, chat);
-      return show(mainMenu());
+      return show(mainMenu(env));
 
     /* sites */
     case 'sl':
@@ -723,6 +729,21 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
     case 'rE':
       await ask(env, chat, { kind: 'repo' }, 'Надішли <code>власник/назва</code> своєї копії проєкту на GitHub.');
       return done();
+    case 'rv': {
+      const all = env.CFG?.settings?.releases === 'all';
+      await setSetting(env, 'releases', all ? 'admins' : 'all');
+      // A reply keyboard changes only with a message: tell people about the new button once.
+      if (!all) {
+        for (const u of await usersBy(env, 'user')) {
+          if (u.role === 'admin') continue;
+          await send(env, u.chat_id, `🚀 У меню з'явилась кнопка «${RELEASES_BUTTON}»: історія версій бота.`, {
+            reply_markup: mainKeyboard(u.role, env),
+          });
+        }
+      }
+      await clearAwait(env, chat);
+      return show(mainMenu(env));
+    }
     case 'up': {
       let offer;
       try {
@@ -740,6 +761,6 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
 /** "⚙️ Налаштування" from the keyboard. */
 export async function openSettings(env, chat) {
   await clearAwait(env, chat);
-  const m = mainMenu();
+  const m = mainMenu(env);
   return send(env, chat, m.text, { reply_markup: { inline_keyboard: m.kb } });
 }

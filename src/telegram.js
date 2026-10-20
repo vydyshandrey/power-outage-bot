@@ -17,17 +17,23 @@ export async function tg(env, method, body) {
   return r.json();
 }
 
+export const RELEASES_BUTTON = '🚀 Що нового';
+
+/** Whether a person sees "🚀 Що нового": admins always, others when the admin turned it on. */
+export const seesReleases = (env, role) => role === 'admin' || env?.CFG?.settings?.releases === 'all';
+
 /** Persistent reply keyboard; admins get users and settings. */
-export const mainKeyboard = (role) => ({
-  keyboard:
+export const mainKeyboard = (role, env) => {
+  const rows =
     role === 'admin'
       ? [
           [{ text: '📊 Статус' }, { text: '🏠 Пристрої' }],
           [{ text: '👥 Користувачі' }, { text: '⚙️ Налаштування' }],
         ]
-      : [[{ text: '📊 Статус' }, { text: '🏠 Пристрої' }]],
-  resize_keyboard: true,
-});
+      : [[{ text: '📊 Статус' }, { text: '🏠 Пристрої' }]];
+  if (seesReleases(env, role)) rows.push([{ text: RELEASES_BUTTON }]);
+  return { keyboard: rows, resize_keyboard: true };
+};
 
 /** Removes HTML tags, for resending a text whose markup Telegram rejected. */
 const plain = (text) =>
