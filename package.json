@@ -1,6 +1,6 @@
 {
   "name": "home-bot",
-  "version": "1.10.0",
+  "version": "2.0.0",
   "description": "Telegram bot that switches appliances off during power outages and back on when power returns. Deye, SmartESS and SmartValue inverters, Midea water heaters. Runs on Cloudflare Workers, set up in Telegram.",
   "private": true,
   "type": "module",

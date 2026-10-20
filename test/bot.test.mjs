@@ -19,7 +19,7 @@ test('access request → admin approves as a user → sees the home, access scre
   assert.ok(toAdmin.markup.inline_keyboard.flat().some((b) => b.callback_data === 'a:42:user'));
 
   const approved = await w.press(ADMIN, 'a:42:user');
-  assert.ok(textsTo(approved, 42).includes('✅ Доступ надано: Користувач.'));
+  assert.ok(textsTo(approved, 42).includes('✅ «Мій кабінет»: Користувач.'));
   const screen = approved.find((m) => m.chat === 'edit');
   assert.match(screen.text, /🔐 Доступ: \u2068Olha\u2069/);
   assert.deepEqual(
@@ -123,7 +123,12 @@ test('the users list is compact; actions are in a person’s card', async () => 
   await w.press(ADMIN, `u:r:${GUEST}`);
   assert.equal(w.db.prepare('SELECT status FROM users WHERE chat_id=?').get(GUEST).status, 'approved', 'asks first');
   await w.press(ADMIN, `r:${GUEST}`);
-  assert.equal(w.db.prepare('SELECT status FROM users WHERE chat_id=?').get(GUEST).status, 'rejected');
+  assert.equal(w.db.prepare('SELECT count(*) n FROM members WHERE chat_id=?').get(GUEST).n, 0, 'out of the cabinet');
+  assert.equal(
+    w.db.prepare("SELECT count(*) n FROM user_devices WHERE chat_id=? AND device='site.home'").get(GUEST).n,
+    0
+  );
+  assert.ok(textsTo(await w.press(GUEST, 'dc:boiler:on'), 'answer').includes('Немає доступу до пристрою'));
 });
 
 test('access from a device: pick people from the list or by search, then save', async () => {

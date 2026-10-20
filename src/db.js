@@ -4,7 +4,18 @@
  * The schema is created lazily on first use, so a fresh database needs no setup.
  */
 
-import { LEVELS, RANK, deviceSite, legacyDevices, legacySites, siteKey, siteTree, sitesOf } from './config.js';
+import {
+  HOME,
+  LEVELS,
+  deviceById,
+  deviceSite,
+  legacyDevices,
+  legacySites,
+  siteCabinet,
+  siteKey,
+  siteTree,
+  sitesOf,
+} from './config.js';
 import { now } from './util.js';
 
 /** Exported for tests, which start from an empty in-memory database. */
@@ -19,6 +30,10 @@ export const SCHEMA = [
   'CREATE TABLE IF NOT EXISTS devices (id TEXT PRIMARY KEY, type TEXT, name TEXT, icon TEXT, site TEXT, params TEXT, auto INTEGER, sort INTEGER)',
   'CREATE TABLE IF NOT EXISTS templates (k TEXT PRIMARY KEY, text TEXT)',
   'CREATE TABLE IF NOT EXISTS readings (site TEXT, ts INTEGER, grid INTEGER, volt REAL, load INTEGER, batt INTEGER, soc INTEGER, PRIMARY KEY (site, ts))',
+  'CREATE TABLE IF NOT EXISTS cabinets (id TEXT PRIMARY KEY, name TEXT, owner INTEGER, created INTEGER)',
+  'CREATE TABLE IF NOT EXISTS members (chat_id INTEGER, cabinet TEXT, role TEXT, PRIMARY KEY (chat_id, cabinet))',
+  'CREATE TABLE IF NOT EXISTS secrets (cabinet TEXT, name TEXT, value TEXT, PRIMARY KEY (cabinet, name))',
+  'CREATE TABLE IF NOT EXISTS invites (code TEXT PRIMARY KEY, cabinet TEXT, by INTEGER, created INTEGER)',
 ];
 
 /** Databases already prepared in this isolate. */
@@ -47,18 +62,41 @@ export async function db(env) {
  *              edits it in the bot; users get an alias column;
  *   v6 (1.7.0) inverters become devices of their sites; a site points at its grid source;
  *   v7 (1.10.0) readings are kept per site (table readings); the old single-site energy
- *              log is copied in as the first site's history.
+ *              log is copied in as the first site's history;
+ *   v8 (2.0.0) cabinets: everything that exists becomes the first cabinet ("c1"); every
+ *              approved person becomes its member with the role they had. users.role now
+ *              only marks the bot's operators (role "admin").
  */
 export async function migrate(env) {
   const D = env.DB;
   const row = await D.prepare("SELECT v FROM kv WHERE k='schema_v'").first();
   const v = Number(row?.v) || 0;
-  if (v >= 7) return;
+  if (v >= 8) return;
   if (v < 4) await migrateRoles(env);
   if (v < 5) await migrateConfig(env);
   if (v < 6) await migrateInverters(env);
-  await migrateReadings(env);
-  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','7') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+  if (v < 7) await migrateReadings(env);
+  await migrateCabinets(env);
+  await D.prepare("INSERT INTO kv (k,v) VALUES ('schema_v','8') ON CONFLICT(k) DO UPDATE SET v=excluded.v").run();
+}
+
+/** v8: the existing sites and people form the first cabinet. */
+async function migrateCabinets(env) {
+  const D = env.DB;
+  const cols = (await D.prepare('PRAGMA table_info(sites)').all()).results.map((c) => c.name);
+  if (!cols.includes('cabinet')) await D.prepare('ALTER TABLE sites ADD COLUMN cabinet TEXT').run();
+  await D.prepare('UPDATE sites SET cabinet=? WHERE cabinet IS NULL').bind(HOME).run();
+  const owner = await D.prepare(
+    "SELECT chat_id FROM users WHERE status='approved' AND role='admin' ORDER BY created LIMIT 1"
+  ).first();
+  await D.prepare('INSERT OR IGNORE INTO cabinets (id,name,owner,created) VALUES (?,?,?,?)')
+    .bind(HOME, 'Мій кабінет', owner?.chat_id ?? null, now())
+    .run();
+  await D.prepare(
+    "INSERT OR IGNORE INTO members (chat_id,cabinet,role) SELECT chat_id, ?, CASE WHEN role='admin' THEN 'admin' ELSE 'user' END FROM users WHERE status='approved'"
+  )
+    .bind(HOME)
+    .run();
 }
 
 /** v7: the energy log of the first site becomes its readings history. */
@@ -158,15 +196,69 @@ export async function kvSet(env, k, v) {
 
 /* ---------- users ---------- */
 
-export async function getUser(env, chatId) {
-  return (await db(env)).prepare('SELECT * FROM users WHERE chat_id=?').bind(chatId).first();
+/**
+ * A person as the bot works with them:
+ *   op    — an operator of the bot (users.role = "admin"): updates, message texts, time zone;
+ *   cabs  — memberships: [{cabinet, role: "admin" | "user"}];
+ *   cab   — the cabinet they work in now (chosen in the bot; by default the first they administer);
+ *   role  — their role in that cabinet, so "role === 'admin'" means "manages this cabinet".
+ */
+async function hydrate(env, row) {
+  if (!row) return row;
+  const cabs = (
+    await (
+      await db(env)
+    )
+      .prepare('SELECT cabinet, role FROM members WHERE chat_id=? ORDER BY rowid')
+      .bind(row.chat_id)
+      .all()
+  ).results;
+  const chosen = await kvGet(env, `cab:${row.chat_id}`);
+  const cur = cabs.find((c) => c.cabinet === chosen) || cabs.find((c) => c.role === 'admin') || cabs[0] || null;
+  return { ...row, op: row.role === 'admin', cabs, cab: cur?.cabinet ?? null, role: cur?.role ?? 'user' };
 }
 
-/** Approved users with at least the given role ("user" or "admin"). */
+export async function getUser(env, chatId) {
+  return hydrate(env, await (await db(env)).prepare('SELECT * FROM users WHERE chat_id=?').bind(chatId).first());
+}
+
+/** Approved people; "admin" — only the bot's operators. */
 export async function usersBy(env, minRole) {
   const { results } = await (await db(env)).prepare("SELECT * FROM users WHERE status='approved'").all();
-  return results.filter((u) => RANK[u.role] >= RANK[minRole]);
+  const all = await Promise.all(results.map((r) => hydrate(env, r)));
+  return minRole === 'admin' ? all.filter((u) => u.op) : all;
 }
+
+/** Admins of a cabinet. */
+export async function cabinetAdmins(env, cabinet) {
+  return (await usersBy(env, 'user')).filter((u) => u.cabs.some((c) => c.cabinet === cabinet && c.role === 'admin'));
+}
+
+/** Adds a person to a cabinet or changes their role there. */
+export async function setMember(env, chatId, cabinet, role) {
+  await (
+    await db(env)
+  )
+    .prepare(
+      'INSERT INTO members (chat_id,cabinet,role) VALUES (?,?,?) ON CONFLICT(chat_id,cabinet) DO UPDATE SET role=excluded.role'
+    )
+    .bind(chatId, cabinet, role)
+    .run();
+}
+
+/** Takes a person out of a cabinet, with their access to its sites and devices. */
+export async function removeMember(env, chatId, cabinet) {
+  const D = await db(env);
+  await D.prepare('DELETE FROM members WHERE chat_id=? AND cabinet=?').bind(chatId, cabinet).run();
+  for (const { site, key, devices } of siteTree(env)) {
+    if (siteCabinet(site) !== cabinet) continue;
+    for (const k of [key, ...devices]) await clearPerm(env, chatId, k);
+  }
+}
+
+/** True when the person manages the cabinet. */
+export const isCabinetAdmin = (user, cabinet) =>
+  Boolean(user?.cabs?.some((c) => c.cabinet === cabinet && c.role === 'admin'));
 
 /* ---------- permissions: a level per site, optional limits per device ---------- */
 
@@ -189,10 +281,13 @@ async function row(env, chatId, key) {
  */
 export async function getPerm(env, user, key) {
   if (!user || user.status !== 'approved') return 'none';
-  if (user.role === 'admin') return 'control';
-  if (key.startsWith('site.')) return (await row(env, user.chat_id, key)) || 'none';
-  const site = deviceSite(env, key);
+  const site = key.startsWith('site.')
+    ? sitesOf(env).find((s) => siteKey(s) === key)
+    : deviceById(env, key) && deviceSite(env, key);
   if (!site) return 'none';
+  // A cabinet's admins see and control everything in it.
+  if (isCabinetAdmin(user, siteCabinet(site))) return 'control';
+  if (key.startsWith('site.')) return (await row(env, user.chat_id, key)) || 'none';
   const siteLevel = (await row(env, user.chat_id, siteKey(site))) || 'none';
   const limit = await row(env, user.chat_id, key);
   return limit ? minLevel(siteLevel, limit) : siteLevel;
@@ -217,11 +312,13 @@ export async function clearPerm(env, chatId, key) {
   await (await db(env)).prepare('DELETE FROM user_devices WHERE chat_id=? AND device=?').bind(chatId, key).run();
 }
 
-/** A newly approved user sees the first site; everything else the admin opens explicitly. */
-export async function resetPerms(env, chatId) {
-  await (await db(env)).prepare('DELETE FROM user_devices WHERE chat_id=?').bind(chatId).run();
-  const first = sitesOf(env)[0];
-  if (first) await setPerm(env, chatId, siteKey(first), 'view');
+/** A new member of a cabinet sees its first site; everything else its admin opens explicitly. */
+export async function resetPerms(env, chatId, cabinet = HOME) {
+  const sites = sitesOf(env).filter((s) => siteCabinet(s) === cabinet);
+  for (const { key, devices } of siteTree(env).filter((n) => siteCabinet(n.site) === cabinet)) {
+    for (const k of [key, ...devices]) await clearPerm(env, chatId, k);
+  }
+  if (sites[0]) await setPerm(env, chatId, siteKey(sites[0]), 'view');
 }
 
 /** Configured devices the user may at least view. */

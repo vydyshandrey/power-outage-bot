@@ -22,6 +22,7 @@ import {
   VERSION,
   controllable,
   devicesOf,
+  siteCabinet,
   siteKey,
   sitesOf,
 } from './config.js';
@@ -30,7 +31,7 @@ import { kvGet, kvSet, logEvent } from './db.js';
 import { DK, deviceState, setDevicePower } from './devices.js';
 import { inverterConfigured, inverterLatest, inverterName } from './inverter.js';
 import { render } from './messages.js';
-import { broadcast, broadcastDevice, mainKeyboard } from './telegram.js';
+import { broadcast, broadcastCabinet, broadcastDevice, mainKeyboard } from './telegram.js';
 import { checkUpdates } from './updates.js';
 import { NL, esc, fmtDur, fmtHM, now } from './util.js';
 
@@ -59,6 +60,12 @@ const USER_NOTES = {
   ],
 };
 const ADMIN_NOTES = {
+  '2.0': [
+    "• 🏠 Кабінети: у кожного свої об'єкти, пристрої й люди. Твій кабінет — усе, що було.",
+    '• 👥 Користувачі → ➕ Запросити людину: посилання, за яким людина одразу потрапляє в кабінет.',
+    '• 🔑 Паролі хмар можна вводити в боті: повідомлення видаляється, пароль зберігається зашифрованим.',
+    '• ⚙️ → 🚪 Реєстрація: відкрий, щоб будь-хто міг створити свій кабінет.',
+  ],
   1.6: [
     "• ⚙️ Налаштування: об'єкти, пристрої, тексти повідомлень, імена людей і часовий пояс — тепер у боті.",
     '• Нові версії приходять повідомленням з кнопкою «⬆️ Оновити».',
@@ -95,13 +102,14 @@ export const K = (site, k) => (site.primary ? k : `${k}@${site.id}`);
 /** Event-log device for a site's grid events; the first site keeps the historical "grid". */
 export const gridDevice = (site) => (site.primary ? 'grid' : `grid@${site.id}`);
 
-const several = (env) => sitesOf(env).length > 1;
+/** Several sites in the site's cabinet: messages then name the site. */
+const several = (env, site) => sitesOf(env).filter((s) => siteCabinet(s) === siteCabinet(site)).length > 1;
 
 /** Variables every site message has. */
 const siteVars = (env, site) => ({
-  where: several(env) ? `${site.name} · ` : '',
+  where: several(env, site) ? `${site.name} · ` : '',
   object: site.name,
-  source: `${inverterName(site)}${several(env) ? ` (${site.name})` : ''}`,
+  source: `${inverterName(site)}${several(env, site) ? ` (${site.name})` : ''}`,
 });
 
 /* ---------- inverter availability ---------- */
@@ -112,7 +120,7 @@ async function inverterDown(env, site, e) {
   if (now() - since < GIVEUP_SEC || (await kvGet(env, K(site, 'deye_alerted'))) === '1') return;
   await kvSet(env, K(site, 'deye_alerted'), '1');
   const vars = { ...siteVars(env, site), duration: fmtDur(now() - since), error: e.message || String(e) };
-  await broadcast(env, render(env, 'inverter_down', vars), 'admin');
+  await broadcastCabinet(env, siteCabinet(site), render(env, 'inverter_down', vars));
 }
 
 async function inverterUp(env, site) {
@@ -122,7 +130,7 @@ async function inverterUp(env, site) {
   if ((await kvGet(env, K(site, 'deye_alerted'))) === '1') {
     await kvSet(env, K(site, 'deye_alerted'), '0');
     const vars = { ...siteVars(env, site), duration: fmtDur(now() - since) };
-    await broadcast(env, render(env, 'inverter_up', vars), 'admin');
+    await broadcastCabinet(env, siteCabinet(site), render(env, 'inverter_up', vars));
   }
 }
 
@@ -133,13 +141,17 @@ async function checkStale(env, site, reading) {
   if (age > STALE_SEC) {
     if ((await kvGet(env, key)) !== '1') {
       await kvSet(env, key, '1');
-      await broadcast(env, render(env, 'stale', { ...siteVars(env, site), duration: fmtDur(age) }), 'admin');
+      await broadcastCabinet(
+        env,
+        siteCabinet(site),
+        render(env, 'stale', { ...siteVars(env, site), duration: fmtDur(age) })
+      );
     }
     return true;
   }
   if ((await kvGet(env, key)) === '1') {
     await kvSet(env, key, '0');
-    await broadcast(env, render(env, 'fresh', siteVars(env, site)), 'admin');
+    await broadcastCabinet(env, siteCabinet(site), render(env, 'fresh', siteVars(env, site)));
   }
   return false;
 }

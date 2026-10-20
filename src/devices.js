@@ -4,9 +4,17 @@
  * DEVICE_TYPES in config.js.
  */
 
+import { siteCabinet, sitesOf } from './config.js';
 import { kvSet, logEvent } from './db.js';
 import { inverterLatest } from './inverter.js';
 import { Midea } from './midea.js';
+import { credEnv } from './secrets.js';
+
+/** The cabinet a device belongs to (through its site). */
+const cabinetOfDevice = (env, dev) => siteCabinet(sitesOf(env).find((s) => s.id === dev.site));
+
+/** Environment with the credentials of the device's cabinet. */
+const devEnv = (env, dev) => credEnv(env, cabinetOfDevice(env, dev));
 
 /**
  * Storage key of a device's state. The device with the historical id "boiler" keeps the
@@ -27,6 +35,7 @@ const DRIVERS = {
     /** An inverter is read, not switched: its state is the reading of its cloud. */
     async state(env, dev) {
       const d = await inverterLatest(env, {
+        cabinet: cabinetOfDevice(env, dev),
         inverter: dev.params.cloud,
         account: dev.params.account || 1,
         params: dev.params,
@@ -84,20 +93,20 @@ const driver = (dev) => {
 };
 
 /** @returns {Promise<DeviceState>} */
-export const deviceState = (env, dev) => driver(dev).state(env, dev);
+export const deviceState = async (env, dev) => driver(dev).state(await devEnv(env, dev), dev);
 
-/** Devices of a type visible to the vendor account. */
-export const listDevices = (env, type) => DRIVERS[type].list(env);
+/** Devices of a type visible to the vendor account. @param {object} cenv a cabinet's credEnv */
+export const listDevices = (cenv, type) => DRIVERS[type].list(cenv);
 
-/** Secrets the vendor account needs that are not set yet. */
-export const missingDeviceSecrets = (env, type) => DRIVERS[type].secrets.filter((n) => !env[n]);
+/** Credentials the vendor account needs that are not set yet. @param {object} cenv a cabinet's credEnv */
+export const missingDeviceSecrets = (cenv, type) => DRIVERS[type].secrets.filter((n) => !cenv[n]);
 
 /**
  * The only place that switches a device: does it, remembers the state and logs who did it.
  * @param {string} actor user name or "автоматика"
  */
 export async function setDevicePower(env, dev, on, actor) {
-  const temp = await driver(dev).setPower(env, dev, on);
+  const temp = await driver(dev).setPower(await devEnv(env, dev), dev, on);
   await kvSet(env, DK(dev, 'boiler_power'), on ? 'on' : 'off');
   await logEvent(env, on ? 'power_on' : 'power_off', dev.id, actor, { temp, colo: env.COLO || '' });
 }

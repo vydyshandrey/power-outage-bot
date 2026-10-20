@@ -10,7 +10,7 @@
  * Callback data: cg chart menu · ch:<site>:<d|w> chart of today or 7 days · ns toggle summaries.
  */
 
-import { READINGS_DAYS, SUMMARY_HOUR, sitesOf, siteKey } from './config.js';
+import { READINGS_DAYS, SUMMARY_HOUR, siteCabinet, siteKey, sitesOf } from './config.js';
 import { db, getPerm, kvGet, kvSet, usersBy, viewableSites } from './db.js';
 import { gridDevice } from './automation.js';
 import { tg } from './telegram.js';
@@ -250,7 +250,8 @@ async function sendPicture(env, chatId, png, caption, kb) {
 
 /* ---------- texts ---------- */
 
-const titled = (env) => sitesOf(env).length > 1;
+/** Several sites in the site's cabinet: texts then name the site. */
+const titled = (env, site) => sitesOf(env).filter((s) => siteCabinet(s) === siteCabinet(site)).length > 1;
 
 function statsLines(st) {
   const lines = [];
@@ -271,7 +272,7 @@ async function sendSummary(env, chatId, site, from, to) {
   const st = await siteStats(env, site, from, to);
   if (!st.rows.length && !st.outages) return; // nothing to tell
   const day = localParts(from).day;
-  const head = `📊 <b>Підсумки дня · ${day}</b>${titled(env) ? `${NL}🏠 ${esc(site.name)}` : ''}`;
+  const head = `📊 <b>Підсумки дня · ${day}</b>${titled(env, site) ? `${NL}🏠 ${esc(site.name)}` : ''}`;
   const caption = [head, '', ...statsLines(st)].join(NL);
   const png =
     st.rows.length > 1
@@ -307,9 +308,10 @@ export async function dailySummaries(env) {
 /** "📈 Графік": which site and period. */
 export async function chartMenu(env, user) {
   const sites = await viewableSites(env, user);
+  const many = sites.length > 1;
   const kb = sites.map((s) => [
-    { text: `${titled(env) ? `${s.name}: ` : ''}сьогодні`, callback_data: `ch:${s.id}:d` },
-    { text: `${titled(env) ? `${s.name}: ` : ''}7 днів`, callback_data: `ch:${s.id}:w` },
+    { text: `${many ? `${s.name}: ` : ''}сьогодні`, callback_data: `ch:${s.id}:d` },
+    { text: `${many ? `${s.name}: ` : ''}7 днів`, callback_data: `ch:${s.id}:w` },
   ]);
   const off = (await kvGet(env, `nosum:${user.chat_id}`)) === '1';
   kb.push([{ text: off ? '🔔 Надсилати підсумки дня' : '🔕 Не надсилати підсумки дня', callback_data: 'ns' }]);
@@ -328,7 +330,9 @@ export async function sendChart(env, user, siteId, range) {
   const from = week ? dayStart(t) - 6 * 86400 : dayStart(t);
   const st = await siteStats(env, site, from, t);
   const period = week ? '7 днів' : 'сьогодні';
-  const caption = [`📈 <b>${titled(env) ? `${esc(site.name)}, ` : ''}${period}</b>`, '', ...statsLines(st)].join(NL);
+  const caption = [`📈 <b>${titled(env, site) ? `${esc(site.name)}, ` : ''}${period}</b>`, '', ...statsLines(st)].join(
+    NL
+  );
   const png =
     st.rows.length > 1
       ? await renderPng(chartConfig(`${site.name} · ${period}`, buckets(st.rows, from, t, week ? 7200 : 900), week))

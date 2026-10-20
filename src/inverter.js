@@ -6,12 +6,15 @@
  *   dess        — DESS Monitor / ShineMonitor: SmartESS, WatchPower, SmartClient …
  *   valueclouds — ValueClouds: the SmartValue app
  *
- * Credentials are Worker secrets. Account 1 uses the plain names (DESS_USER), account 2 adds
- * a suffix (DESS_USER_2), so one deployment can read inverters from several accounts.
+ * Credentials come from the site's cabinet (see secrets.js). Account 1 uses the plain names
+ * (DESS_USER), account 2 adds a suffix (DESS_USER_2), so a cabinet can read inverters from
+ * several accounts of the same cloud.
  */
 
 import { dessDevices, dessLatest } from './dess.js';
 import { deyeLatest, deyeStations } from './deye.js';
+import { siteCabinet } from './config.js';
+import { credEnv } from './secrets.js';
 import { valueCloudsLatest, valueCloudsLogin, valueCloudsProbe } from './valueclouds.js';
 
 const suffix = (account) => (Number(account) > 1 ? `_${account}` : '');
@@ -43,7 +46,7 @@ export const CLOUDS = {
         email: env[`DEYE_EMAIL${s}`],
         password: env[`DEYE_PASSWORD${s}`],
         api: env[`DEYE_API${s}`],
-        cacheKey: `deye_token${s}`,
+        cacheKey: `${env.CRED_PREFIX || ''}deye_token${s}`,
       };
     },
     latest: (c, p) => deyeLatest(c, p.sn),
@@ -70,7 +73,7 @@ export const CLOUDS = {
         password: env[`DESS_PASSWORD${s}`],
         companyKey: env[`DESS_COMPANY_KEY${s}`],
         platform: params.platform,
-        cacheKey: `dess_token${s}${params.platform === 'shinemonitor' ? '_shine' : ''}`,
+        cacheKey: `${env.CRED_PREFIX || ''}dess_token${s}${params.platform === 'shinemonitor' ? '_shine' : ''}`,
       };
     },
     latest: (c, p) => dessLatest(c, p),
@@ -82,7 +85,12 @@ export const CLOUDS = {
     secrets: ['VC_USER', 'VC_PASSWORD'],
     connect: (env, account) => {
       const s = suffix(account);
-      return { env, user: env[`VC_USER${s}`], password: env[`VC_PASSWORD${s}`], cacheKey: `vc_token${s}` };
+      return {
+        env,
+        user: env[`VC_USER${s}`],
+        password: env[`VC_PASSWORD${s}`],
+        cacheKey: `${env.CRED_PREFIX || ''}vc_token${s}`,
+      };
     },
     latest: (c, p) => valueCloudsLatest(c, p),
     list: null,
@@ -110,9 +118,10 @@ export const inverterName = (site) => cloudOf(site.inverter).name;
 export const inverterConfigured = (env, site) => Boolean(site.params?.sn);
 
 /** @returns {Promise<import('./deye.js').Reading>} */
-export function inverterLatest(env, site) {
+export async function inverterLatest(env, site) {
   const cloud = cloudOf(site.inverter);
-  return cloud.latest(cloud.connect(env, site.account, site.params), site.params);
+  const cenv = await credEnv(env, siteCabinet(site));
+  return cloud.latest(cloud.connect(cenv, site.account, site.params), site.params);
 }
 
 /**

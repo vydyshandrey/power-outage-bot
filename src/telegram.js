@@ -1,6 +1,6 @@
 /** Telegram Bot API: transport, keyboards and fan-out notifications. */
 
-import { getPerm, usersBy } from './db.js';
+import { cabinetAdmins, getPerm, usersBy } from './db.js';
 
 /**
  * Calls a Bot API method.
@@ -73,6 +73,17 @@ export async function broadcast(env, text, minRole = 'user', extra) {
   for (const u of await usersBy(env, minRole)) {
     try {
       await send(env, u.chat_id, text, typeof extra === 'function' ? extra(u) : extra);
+    } catch {
+      /* continue with the next recipient */
+    }
+  }
+}
+
+/** Sends to the admins of a cabinet: problems they can fix (an inverter offline …). */
+export async function broadcastCabinet(env, cabinet, text) {
+  for (const u of await cabinetAdmins(env, cabinet)) {
+    try {
+      await send(env, u.chat_id, text);
     } catch {
       /* continue with the next recipient */
     }

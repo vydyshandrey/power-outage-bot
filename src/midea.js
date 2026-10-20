@@ -45,6 +45,8 @@ export class Midea {
   /** @param {import('./config.js').Env} env */
   constructor(env) {
     this.env = env;
+    /** Cloud sessions of different cabinets are cached separately. */
+    this.prefix = env.CRED_PREFIX || '';
     /** @type {{apiUrl: string, uid: string|null, token: string|null, deviceId: string} | null} */
     this.session = null;
   }
@@ -115,14 +117,14 @@ export class Midea {
       });
       if (route?.masUrl) {
         this.session.apiUrl = route.masUrl;
-        if ((await kvGet(this.env, 'midea_mas')) !== route.masUrl) {
-          await kvSet(this.env, 'midea_mas', route.masUrl);
+        if ((await kvGet(this.env, `${this.prefix}midea_mas`)) !== route.masUrl) {
+          await kvSet(this.env, `${this.prefix}midea_mas`, route.masUrl);
           await logEvent(this.env, 'midea_route', 'midea', 'route', { mas: route.masUrl });
         }
       }
     } catch {
       // Route lookup sometimes fails (10004): fall back to the last known regional endpoint.
-      const mas = await kvGet(this.env, 'midea_mas');
+      const mas = await kvGet(this.env, `${this.prefix}midea_mas`);
       if (mas) this.session.apiUrl = mas;
     }
 
@@ -142,13 +144,13 @@ export class Midea {
     });
     this.session.uid = r.uid;
     this.session.token = r.mdata.accessToken;
-    await kvSet(this.env, 'midea_session', JSON.stringify(this.session));
+    await kvSet(this.env, `${this.prefix}midea_session`, JSON.stringify(this.session));
   }
 
   /** API call with up to 3 attempts; each retry waits and logs in again. */
   async call(endpoint, params) {
     if (!this.session) {
-      const saved = await kvGet(this.env, 'midea_session');
+      const saved = await kvGet(this.env, `${this.prefix}midea_session`);
       if (saved) this.session = JSON.parse(saved);
     }
     let lastError;

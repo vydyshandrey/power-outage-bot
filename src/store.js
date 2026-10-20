@@ -3,7 +3,7 @@
  * Loaded once per request into env.CFG, so the rest of the code reads it synchronously.
  */
 
-import { DEFAULT_TZ } from './config.js';
+import { DEFAULT_TZ, HOME } from './config.js';
 import { db } from './db.js';
 import { setTimeZone } from './util.js';
 
@@ -38,6 +38,7 @@ export async function loadConfig(env) {
     return {
       id: r.id,
       name: r.name,
+      cabinet: r.cabinet || HOME,
       source: src?.id || null,
       inverter: src?.params.cloud || null,
       account: Number(src?.params.account) || 1,
@@ -51,7 +52,8 @@ export async function loadConfig(env) {
   const templates = Object.fromEntries(
     (await D.prepare('SELECT k, text FROM templates').all()).results.map((r) => [r.k, r.text])
   );
-  env.CFG = { sites, devices, settings, templates };
+  const cabinets = (await D.prepare('SELECT * FROM cabinets ORDER BY created, rowid').all()).results;
+  env.CFG = { sites, devices, settings, templates, cabinets };
   setTimeZone(settings.tz || env.TZ || DEFAULT_TZ);
   return env.CFG;
 }
@@ -75,13 +77,13 @@ async function nextSort(env) {
 /* ---------- sites ---------- */
 
 /** @returns {Promise<string>} id of the new site */
-export async function addSite(env, { name }) {
+export async function addSite(env, { name, cabinet = HOME }) {
   const id = await nextId(env, 'sites', 's');
   await (
     await db(env)
   )
-    .prepare("INSERT INTO sites (id,name,account,params,sort) VALUES (?,?,1,'{}',?)")
-    .bind(id, name, await nextSort(env))
+    .prepare("INSERT INTO sites (id,name,account,params,sort,cabinet) VALUES (?,?,1,'{}',?,?)")
+    .bind(id, name, await nextSort(env), cabinet)
     .run();
   await loadConfig(env);
   return id;
@@ -151,6 +153,30 @@ export async function deleteDevice(env, id, reload = true) {
   await D.prepare('DELETE FROM user_devices WHERE device=?').bind(id).run();
   if (reload) await loadConfig(env);
 }
+
+/* ---------- cabinets ---------- */
+
+/** Creates a cabinet with its first admin. @returns {Promise<string>} its id */
+export async function addCabinet(env, { name, owner }) {
+  const id = await nextId(env, 'cabinets', 'c');
+  const D = await db(env);
+  await D.prepare('INSERT INTO cabinets (id,name,owner,created) VALUES (?,?,?,?)')
+    .bind(id, name, owner, Math.floor(Date.now() / 1000))
+    .run();
+  await D.prepare('INSERT OR REPLACE INTO members (chat_id,cabinet,role) VALUES (?,?,?)')
+    .bind(owner, id, 'admin')
+    .run();
+  await loadConfig(env);
+  return id;
+}
+
+export async function renameCabinet(env, id, name) {
+  await (await db(env)).prepare('UPDATE cabinets SET name=? WHERE id=?').bind(name, id).run();
+  await loadConfig(env);
+}
+
+/** Name of a cabinet, as its people see it. */
+export const cabinetName = (env, id) => env.CFG?.cabinets?.find((c) => c.id === id)?.name || 'Кабінет';
 
 /* ---------- settings, message texts, aliases ---------- */
 
