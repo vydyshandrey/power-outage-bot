@@ -59,7 +59,7 @@ export async function logReading(env, site, d) {
     await db(env)
   )
     .prepare('INSERT OR IGNORE INTO readings (site,ts,grid,volt,load,batt,soc) VALUES (?,?,?,?,?,?,?)')
-    .bind(site.id, d.ts, d.grid ? 1 : 0, d.volt, d.load, d.batt, d.soc)
+    .bind(site.id, d.ts, d.grid === null ? null : d.grid ? 1 : 0, d.volt, d.load, d.batt, d.soc)
     .run();
 }
 
@@ -137,7 +137,7 @@ function buckets(rows, from, to, step) {
       t,
       load: loads.length ? Math.round(loads.reduce((a, b) => a + b, 0) / loads.length) : null,
       soc: inB.length ? inB[inB.length - 1].soc : null,
-      off: inB.some((r) => !r.grid),
+      off: inB.some((r) => r.grid === 0),
     });
   }
   return out;
