@@ -8,6 +8,7 @@
 
 import { userCard } from './access.js';
 import { batteryThreshold } from './automation.js';
+import { batteryCapacity, parseCapacity } from './runtime.js';
 import { CATEGORIES, DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
 import { db, kvGet, kvSet, usersBy } from './db.js';
 import { listDevices, missingDeviceSecrets } from './devices.js';
@@ -131,6 +132,8 @@ function siteCard(env, id) {
     { text: '👥 Доступ людей', callback_data: `u:k:site.${id}` },
     { text: `🪫 Батарея: ${thr ? `${thr}%` : 'не попереджати'}`, callback_data: `s:bt:${id}` },
   ]);
+  const cap = batteryCapacity(env, s);
+  kb.push([{ text: `🔋 Ємність батареї: ${cap ? `${cap} кВт·год` : 'не вказано'}`, callback_data: `s:bc:${id}` }]);
   kb.push([{ text: '🗑 Видалити', callback_data: `s:sd:${id}` }], back('s:sl'));
   return { text: lines.join(NL), kb };
 }
@@ -391,6 +394,18 @@ export async function onSettingsText(env, msg, user) {
       });
       return true;
     }
+    case 'site_cap': {
+      const v = parseCapacity(text);
+      if (v === null) {
+        await send(env, chat, '⚠️ Потрібне число кВт·год, наприклад <code>10,24</code>. /cancel — скасувати.');
+        return true;
+      }
+      await setSetting(env, `cap@${state.id}`, String(v));
+      await clearAwait(env, chat);
+      const c = siteCard(env, state.id);
+      await send(env, chat, c.text, { reply_markup: { inline_keyboard: c.kb } });
+      return true;
+    }
     case 'site_name': {
       await updateSite(env, state.id, { name: text.slice(0, 40) });
       await clearAwait(env, chat);
@@ -571,6 +586,14 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
           back(`s:so:${a}`),
         ],
       });
+    case 'bc':
+      await ask(
+        env,
+        chat,
+        { kind: 'site_cap', id: a },
+        'Ємність батареї об’єкта в кВт·год, наприклад <code>10,24</code>. За нею бот рахує, на скільки вистачить заряду без світла. <code>0</code> — не вказувати.'
+      );
+      return done();
     case 'bT':
       await setSetting(env, `batt@${a}`, String(Number(b) || 0));
       return show(siteCard(env, a));

@@ -5,6 +5,7 @@ import { db, getPerm, kvGet, viewableDevices, viewableSites } from './db.js';
 import { K, gridDevice } from './automation.js';
 import { DK, deviceState } from './devices.js';
 import { inverterConfigured, inverterLatest, inverterName } from './inverter.js';
+import { batteryRuntime } from './runtime.js';
 import { NL, esc, fmtDur, fmtHM, fmtTime, now } from './util.js';
 
 /** "📊 Статус": per visible site grid, consumption and battery, then one line per visible device. */
@@ -41,6 +42,8 @@ async function siteLines(env, site) {
     } else {
       lines.push(`🔌 Світла немає${dur}`);
       lines.push(`🔋 Від інвертора: споживання ${d.load} Вт, батарея ${d.soc}% (${Math.abs(d.batt)} Вт)`);
+      const left = await batteryRuntime(env, site, d, since);
+      if (left.sec !== null) lines.push(`⏳ Вистачить приблизно на ${fmtDur(left.sec)}`);
     }
     lines.push(`🕒 Дані ${inverterName(site)}: ${fmtDur(now() - d.ts)} тому`);
   } catch (e) {
