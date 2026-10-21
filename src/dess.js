@@ -148,6 +148,7 @@ const FIELDS = {
 function pick(points, re) {
   const pt = points.find((x) => re.test(String(x.title).trim()));
   if (!pt) return null;
+  if (pt.val === null || pt.val === undefined || String(pt.val).trim() === '') return null;
   const n = Number(pt.val);
   if (Number.isNaN(n)) return pt.val;
   return /^k(w|va)$/i.test(pt.unit || '') ? n * 1000 : n;
@@ -158,16 +159,20 @@ function pick(points, re) {
  * @param {Array<{title: string, val: string, unit?: string}>} points
  */
 export function parseDessPoints(points) {
-  const volt = pick(points, FIELDS.volt) ?? 0;
-  const hz = pick(points, FIELDS.hz) ?? 0;
+  const volt = pick(points, FIELDS.volt);
+  const hz = pick(points, FIELDS.hz);
   let batt = pick(points, FIELDS.battPower);
   if (batt === null) {
     const v = pick(points, FIELDS.battV) ?? 0;
     batt = v * ((pick(points, FIELDS.battDis) ?? 0) - (pick(points, FIELDS.battChg) ?? 0));
   }
+  let grid = null;
+  if (Number.isFinite(volt) && (hz === null || Number.isFinite(hz))) {
+    grid = volt > GRID_V_MIN && (hz === null || hz === 0 || hz > GRID_HZ_MIN);
+  }
   return {
     // Some firmwares report no grid frequency; then voltage alone decides.
-    grid: volt > GRID_V_MIN && (hz === 0 || hz > GRID_HZ_MIN),
+    grid,
     volt,
     hz,
     soc: pick(points, FIELDS.soc) ?? NaN,
