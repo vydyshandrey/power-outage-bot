@@ -112,3 +112,9 @@ test('DESS with a wrong password reports the platform error', async () => {
   const body = await (await w.http(`/discover?key=${ACCESS_KEY}`)).json();
   assert.match(body.sites.home.error, /ERR_PASSWORD_VERIF_FAIL/);
 });
+
+test('DESS missing or invalid grid voltage is unknown', () => {
+  assert.equal(parseDessPoints([{ title: 'Battery capacity', val: '76', unit: '%' }]).grid, null);
+  assert.equal(parseDessPoints([{ title: 'Grid voltage', val: '', unit: 'V' }]).grid, null);
+  assert.equal(parseDessPoints([{ title: 'Grid voltage', val: '0', unit: 'V' }]).grid, false);
+});

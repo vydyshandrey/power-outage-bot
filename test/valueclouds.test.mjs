@@ -67,3 +67,9 @@ test('/discover with a wrong SmartValue password shows the platform message', as
   const body = await (await w.http(`/discover?key=${ACCESS_KEY}`)).json();
   assert.match(body.sites.home.error, /account or password error/);
 });
+
+test('SmartValue missing grid voltage is unknown', () => {
+  const r = parseValueClouds({ pars: { bt_: [{ id: 'bt_battery_capacity', val: '77', unit: '%' }] } });
+  assert.equal(r.grid, null);
+  assert.equal(r.volt, null);
+});
