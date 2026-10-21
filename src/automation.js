@@ -237,6 +237,8 @@ async function tickSite(env, site) {
   await checkBattery(env, site, d);
 
   const prev = await kvGet(env, K(site, 'grid'));
+  // Unknown telemetry must never produce an outage event or change device intent.
+  if (d.grid === null) return;
   if (prev !== (d.grid ? 'on' : 'off')) {
     await onGridChange(env, site, prev, d);
     if (d.grid) return; // switching back on waits for ON_DELAY_SEC of stable grid
@@ -244,7 +246,7 @@ async function tickSite(env, site) {
 
   for (const dev of automated(env, site)) {
     try {
-      if (!d.grid && (await kvGet(env, DK(dev, 'want_off'))) === '1') await switchOff(env, site, dev, d);
+      if (d.grid === false && (await kvGet(env, DK(dev, 'want_off'))) === '1') await switchOff(env, site, dev, d);
       if (d.grid && (await kvGet(env, DK(dev, 'boiler_auto_off'))) === '1') await switchBackOn(env, site, dev, d);
     } catch (e) {
       await reportError(env, dev.name, e);
@@ -266,7 +268,7 @@ async function checkBattery(env, site, d) {
   const key = K(site, 'batt_low');
   const warned = (await kvGet(env, key)) === '1';
   if (warned && (d.grid || d.soc >= thr + BATTERY_ALERT_HYST)) return kvSet(env, key, '0');
-  if (warned || !thr || d.grid || !Number.isFinite(d.soc) || d.soc > thr) return;
+  if (warned || !thr || d.grid !== false || !Number.isFinite(d.soc) || d.soc > thr) return;
   await kvSet(env, key, '1');
   const since = Number(await kvGet(env, K(site, 'grid_since'))) || null;
   const vars = { ...siteVars(env, site), soc: d.soc, load: d.load, duration: since ? fmtDur(now() - since) : '' };
