@@ -33,9 +33,22 @@ async function siteLines(env, site) {
     const d = await inverterLatest(env, site);
     // If the tick has not recorded a fresh transition yet, count from the reading itself.
     const stored = await kvGet(env, K(site, 'grid'));
-    const since = stored === (d.grid ? 'on' : 'off') ? Number(await kvGet(env, K(site, 'grid_since'))) || null : d.ts;
+    const gridState = d.grid === null ? null : d.grid ? 'on' : 'off';
+    let since = null;
+    if (gridState !== null) {
+      const storedSince = Number(await kvGet(env, K(site, 'grid_since'))) || null;
+      since = stored === gridState ? storedSince : d.ts;
+    }
     const dur = since ? ` ${fmtDur(now() - since)} (з ${fmtTime(since)})` : '';
-    if (d.grid) {
+    if (d.grid === null) {
+      lines.push(
+        '⚠️ Стан мережі невідомий: інвертор не передав достовірну напругу. Автоматика за станом мережі призупинена.'
+      );
+      const load = Number.isFinite(d.load) ? `${d.load} Вт` : 'немає даних';
+      const soc = Number.isFinite(d.soc) ? `${d.soc}%` : 'немає даних';
+      lines.push(`🏠 Споживання: ${load}`);
+      lines.push(`🔋 Батарея: ${soc}`);
+    } else if (d.grid) {
       lines.push(`💡 Світло є${dur}, ${d.volt} В`);
       lines.push(`🏠 Споживання: ${d.load} Вт`);
       lines.push(`🔋 Батарея: ${d.soc}% (${d.batt} Вт)`);
