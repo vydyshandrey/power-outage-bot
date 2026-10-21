@@ -148,6 +148,8 @@ export function createWorld({ users = true } = {}) {
   const w = {
     clock: 1_800_000_000,
     soc: 90,
+    load: 410, // W the inverter reports with grid (with an ATS, only what hangs on it)
+    draw: 420, // W from the battery without grid
     grid: true,
     deyeTs: 0,
     boiler: { power: 'on', cur_temperature: 57, temperature: 60 },
@@ -212,8 +214,8 @@ export function createWorld({ users = true } = {}) {
               { key: 'GridVoltageL1L2', value: on ? '230' : '0' },
               { key: 'GridFrequency', value: on ? '50' : '0' },
               { key: 'SOC', value: String(w.soc) },
-              { key: 'BatteryPower', value: on ? '-50' : '420' },
-              { key: 'TotalConsumptionPower', value: '410' },
+              { key: 'BatteryPower', value: on ? '-50' : String(w.draw) },
+              { key: 'TotalConsumptionPower', value: String(on ? w.load : w.draw - 10) },
             ],
           },
         ],
