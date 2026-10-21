@@ -97,6 +97,7 @@ const FIELDS = {
 function pick(items, { id, par }) {
   const it = items.find((x) => x.id === id) || items.find((x) => par.test(String(x.par || x.title || '').trim()));
   if (!it) return null;
+  if (it.val === null || it.val === undefined || String(it.val).trim() === '') return null;
   const n = Number(it.val);
   return Number.isNaN(n) ? null : /^kw$/i.test(it.unit || '') ? n * 1000 : n;
 }
@@ -109,13 +110,17 @@ function pick(items, { id, par }) {
 export function parseValueClouds(data) {
   const items = Object.values(data?.pars || {}).flat();
   if (!items.length) throw new ValueCloudsError('SmartValue: інвертор не повернув даних');
-  const volt = pick(items, FIELDS.volt) ?? 0; // without grid the sensor still shows a few volts
-  const hz = pick(items, FIELDS.hz) ?? 0;
+  const volt = pick(items, FIELDS.volt); // missing voltage is unknown, not an outage
+  const hz = pick(items, FIELDS.hz);
   // `gts` is the snapshot time in milliseconds; a clock ahead of ours is capped.
   const ts = data.gts ? Math.min(Math.floor(Number(data.gts) / 1000), now()) : now();
+  let grid = null;
+  if (Number.isFinite(volt) && (hz === null || Number.isFinite(hz))) {
+    grid = volt > GRID_V_MIN && (hz === null || hz === 0 || hz > GRID_HZ_MIN);
+  }
   return {
     ts,
-    grid: volt > GRID_V_MIN && (hz === 0 || hz > GRID_HZ_MIN),
+    grid,
     volt,
     hz,
     soc: pick(items, FIELDS.soc) ?? NaN,
