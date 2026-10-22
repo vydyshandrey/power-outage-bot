@@ -9,14 +9,12 @@
  *   - the current outage, over its last CUR_WINDOW_SEC, once it has lasted CUR_MIN_SEC;
  *   - otherwise the outages of the last HISTORY_DAYS (and, with nothing else, whatever the
  *     current outage has so far).
- * The low end of past outages (LOW_PERCENTILE of their discharge) is what the inverter and the
- * always-on load take even "in silence": it gives the upper end of a range, "~6–9 год".
+ * A single estimate uses the average discharge; historical minimums do not predict runtime.
  *
  * Two ways to turn discharge into time:
  *   capacity — the site's battery capacity (kWh, ⚙️ → object) × charge ÷ discharge;
  *   rate     — without capacity: how fast the charge falls, %/h, in the current outage
- *              (RATE_MIN_SEC and RATE_MIN_DROP), else in past outages; the range scales by
- *              the same low/average discharge ratio.
+ *              (RATE_MIN_SEC and RATE_MIN_DROP), else in past outages.
  * With neither, the answer says what is missing. Estimates run to an empty battery.
  */
 
@@ -26,7 +24,6 @@ import { now } from './util.js';
 export const CUR_WINDOW_SEC = 30 * 60;
 export const CUR_MIN_SEC = 15 * 60;
 export const HISTORY_DAYS = 14;
-export const LOW_PERCENTILE = 0.1;
 /** Past outage readings needed before they are trusted (ticks are 2 min apart: ~20 min). */
 export const HISTORY_MIN_READINGS = 10;
 export const RATE_MIN_SEC = 20 * 60;
@@ -49,7 +46,6 @@ export function parseCapacity(text) {
 const drawOf = (r) => (Math.abs(r.batt) > 0 ? Math.abs(r.batt) : Number(r.load) || 0);
 
 const avg = (xs) => xs.reduce((a, b) => a + b, 0) / xs.length;
-const percentile = (xs, p) => [...xs].sort((a, b) => a - b)[Math.floor((xs.length - 1) * p)];
 
 /** Charge falling, % per hour, over runs of consecutive readings without grid. */
 function fallRate(rows) {
@@ -80,8 +76,8 @@ async function outageReadings(env, site, d, gridSince) {
 /**
  * @param {{grid: boolean, soc: number, load: number, batt: number, ts: number}} d latest reading
  * @param {number|null} gridSince start of the current grid state
- * @returns {Promise<{sec: number, secMax: number|null, how: string} | {sec: null, why: string}>}
- *   sec — at the usual discharge; secMax — at the lowest, "in silence"
+ * @returns {Promise<{sec: number, how: string} | {sec: null, why: string}>}
+ *   sec — at the average discharge
  */
 export async function batteryRuntime(env, site, d, gridSince) {
   if (!Number.isFinite(d?.soc)) return { sec: null, why: 'немає даних про заряд батареї' };
@@ -103,17 +99,13 @@ export async function batteryRuntime(env, site, d, gridSince) {
     draw = avg(cur.map(drawOf));
     from = `середній розряд за ${Math.max(1, Math.round(curSpan / 60))} хв цього відключення`;
   }
-  const low = havePast ? percentile(pastDraws, LOW_PERCENTILE) : null;
-  const ratio = draw && low && low < draw * 0.9 ? draw / low : null; // a range only when it is one
 
   const cap = batteryCapacity(env, site);
   if (cap && draw > 0) {
     const sec = ((cap * 1000 * d.soc) / 100 / draw) * 3600;
-    const lowNote = ratio ? `, у тиші ${Math.round(low)} Вт` : '';
     return {
       sec,
-      secMax: ratio ? sec * ratio : null,
-      how: `ємність ${cap} кВт·год, заряд ${d.soc}%, ${from} ${Math.round(draw)} Вт${lowNote}`,
+      how: `ємність ${cap} кВт·год, заряд ${d.soc}%, ${from} ${Math.round(draw)} Вт`,
     };
   }
 
@@ -122,7 +114,6 @@ export async function batteryRuntime(env, site, d, gridSince) {
     const sec = (d.soc / curRate.perHour) * 3600;
     return {
       sec,
-      secMax: ratio ? sec * ratio : null,
       how: `заряд падає на ${curRate.perHour.toFixed(1)}% за годину в цьому відключенні`,
     };
   }
@@ -131,7 +122,6 @@ export async function batteryRuntime(env, site, d, gridSince) {
     const sec = (d.soc / pastRate.perHour) * 3600;
     return {
       sec,
-      secMax: ratio ? sec * ratio : null,
       how: `у відключеннях за ${HISTORY_DAYS} днів заряд падав у середньому на ${pastRate.perHour.toFixed(1)}% за годину`,
     };
   }
@@ -143,12 +133,11 @@ export async function batteryRuntime(env, site, d, gridSince) {
   };
 }
 
-/** "~7 год", "~6–9 год", "~40 хв": rounded, as approximate as it is. */
-export function fmtRuntime(sec, secMax) {
+/** "~7 год", "~40 хв": one rounded estimate at the average discharge. */
+export function fmtRuntime(sec) {
   const one = (s) =>
     s < 3600 ? Math.max(1, Math.round(s / 600) * 10) : s < 36000 ? Math.round(s / 1800) / 2 : Math.round(s / 3600);
   const unit = (s) => (s < 3600 ? 'хв' : 'год');
   const num = (s) => String(one(s)).replace('.', ',');
-  if (!secMax || unit(sec) !== unit(secMax) || one(secMax) <= one(sec)) return `~${num(sec)} ${unit(sec)}`;
-  return `~${num(sec)}–${num(secMax)} ${unit(secMax)}`;
+  return `~${num(sec)} ${unit(sec)}`;
 }

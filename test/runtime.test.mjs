@@ -27,12 +27,10 @@ test('typed capacity is read with a comma or a unit; nonsense is refused', () =>
   assert.equal(parseCapacity('багато'), null);
 });
 
-test('the estimate is rounded as approximately as it is, a range only when it is one', () => {
+test('the estimate is a single rounded value', () => {
   assert.equal(fmtRuntime(21.9 * 3600), '~22 год');
   assert.equal(fmtRuntime(8.4 * 3600), '~8,5 год');
-  assert.equal(fmtRuntime(6 * 3600, 9.1 * 3600), '~6–9 год');
   assert.equal(fmtRuntime(40 * 60), '~40 хв');
-  assert.equal(fmtRuntime(6 * 3600, 6.1 * 3600), '~6 год');
 });
 
 test('with the capacity set, the status gives the estimate from what the battery gives without grid', async () => {
@@ -72,7 +70,7 @@ test('an average, not one reading: the discharge of the last 30 min of the outag
   assert.match(await status(w), /⏳ Вистачить на ~20 год/);
 });
 
-test('past outages give the estimate from the first minute, as a range down to the quiet minimum', async () => {
+test('past outages give one average estimate from the first minute', async () => {
   const w = createWorld();
   await capacity(w, '10');
   await w.tick();
@@ -85,8 +83,8 @@ test('past outages give the estimate from the first minute, as a range down to t
   w.grid = false;
   w.draw = 900; // a kettle right now; one reading must not decide
   await run(w, 2);
-  // past average 470 W → ~19 h; at the quiet 200 W → ~45 h
-  assert.match(await status(w), /⏳ Вистачить на ~19–45 год/);
+  // past average 470 W → ~19 h; the quiet minimum must not extend the estimate
+  assert.match(await status(w), /⏳ Вистачить на ~19 год/);
 });
 
 test('without the capacity: nothing at first, then from how fast the charge falls', async () => {
@@ -101,3 +99,28 @@ test('without the capacity: nothing at first, then from how fast the charge fall
   // 85% left at ~10% an hour → ~8,5 h
   assert.match(await status(w), /⏳ Вистачить на ~8,5 год/);
 });
+
+// A tiny historical reading used to inflate the upper bound to thousands of hours.
+for (const withCapacity of [true, false]) {
+  test(`tiny past discharge cannot inflate runtime (capacity: ${withCapacity})`, async () => {
+    const w = createWorld();
+    if (withCapacity) await capacity(w, '10');
+    await w.tick();
+    w.grid = false;
+    await run(w, 40, (i) => {
+      w.draw = i < 3 ? 1 : 500;
+      w.soc -= 0.5;
+    });
+    w.grid = true;
+    await run(w, 20);
+    w.grid = false;
+    w.draw = 750;
+    await run(w, 32, () => {
+      w.soc -= 0.5;
+    });
+    const text = await status(w);
+    assert.match(text, /⏳ Вистачить на ~[\d,]+ год/);
+    assert.doesNotMatch(text, /⏳[^\n]*[–—]/);
+    if (withCapacity) assert.match(text, /⏳ Вистачить на ~9,5 год/);
+  });
+}
