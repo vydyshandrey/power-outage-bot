@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { fmtRuntime, parseCapacity } from '../src/runtime.js';
+import { fmtRuntime, parseCapacity, batteryRuntime, batteryCutoff, parseCutoff } from '../src/runtime.js';
 import { ADMIN, MEMBER, createWorld } from './helpers/world.mjs';
 
 const status = async (w) => (await w.say(MEMBER, '📊 Статус')).map((m) => m.text).join('\n');
@@ -124,3 +124,55 @@ for (const withCapacity of [true, false]) {
     if (withCapacity) assert.match(text, /⏳ Вистачить на ~9,5 год/);
   });
 }
+
+test('shutdown threshold input is strict and distinct from warning threshold', () => {
+  assert.equal(parseCutoff('20,5 %'), 20.5);
+  for (const bad of ['-5', '101', '20 volts', 'NaN', '']) assert.equal(parseCutoff(bad), null);
+  assert.equal(parseCutoff('0'), 0);
+  assert.equal(parseCutoff('100'), 100);
+  assert.equal(batteryCutoff({ CFG: { settings: { 'batt@home': '30' } } }, { id: 'home' }), null);
+  assert.equal(fmtRuntime(0), '0 хв');
+});
+
+for (const mode of ['capacity', 'current-rate', 'past-rate']) {
+  test(`shutdown reserve reduces runtime for ${mode}, including exhausted reserve`, async () => {
+    const w = createWorld();
+    await w.tick();
+    const site = { id: 'home' };
+    w.env.CFG = { settings: {} };
+    w.env.CFG.settings['cap@home'] = mode === 'capacity' ? '10' : '0';
+    w.db.exec('DELETE FROM readings');
+    const end = w.clock - 3600;
+    for (let i = 0; i <= 10; i++) {
+      w.db
+        .prepare('INSERT INTO readings(site,ts,grid,load,batt,soc) VALUES(?,?,?,?,?,?)')
+        .run('home', end - 1200 + i * 120, 0, 500, 500, 90 - i);
+    }
+    const d = { grid: false, soc: 80, load: 500, batt: 500, ts: end };
+    const since = mode === 'past-rate' ? end + 1 : end - 1200;
+    const original = await batteryRuntime(w.env, site, d, since);
+    assert.ok(original.sec > 0);
+    w.env.CFG.settings['cutoff@home'] = '20';
+    const limited = await batteryRuntime(w.env, site, d, since);
+    assert.equal(limited.sec, original.sec * 0.75);
+    assert.match(limited.how, /до порогу 20%/);
+    assert.equal(batteryCutoff(w.env, { id: 'other' }), null);
+    for (const soc of [20, 15]) assert.equal((await batteryRuntime(w.env, site, { ...d, soc }, since)).sec, 0);
+  });
+}
+
+test('administrator sets shutdown SOC and status names the forecast boundary', async () => {
+  const w = createWorld();
+  await capacity(w, '10');
+  await w.press(ADMIN, 's:bl:home');
+  await w.say(ADMIN, '20%');
+  assert.equal(w.db.prepare('SELECT v FROM kv WHERE k=?').get('cfg.cutoff@home')?.v, '20');
+  await w.tick();
+  w.grid = false;
+  w.draw = 500;
+  await run(w, 2);
+  assert.match(await status(w), /~14 год \(до порогу 20%\)/);
+  w.soc = 20;
+  await run(w, 2);
+  assert.match(await status(w), /Доступний заряд вичерпано/);
+});

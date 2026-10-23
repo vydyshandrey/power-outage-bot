@@ -15,7 +15,7 @@
  *   capacity — the site's battery capacity (kWh, ⚙️ → object) × charge ÷ discharge;
  *   rate     — without capacity: how fast the charge falls, %/h, in the current outage
  *              (RATE_MIN_SEC and RATE_MIN_DROP), else in past outages.
- * With neither, the answer says what is missing. Estimates run to an empty battery.
+ * With neither, the answer says what is missing. Estimates use only charge above the configured shutdown threshold.
  */
 
 import { db } from './db.js';
@@ -31,6 +31,21 @@ export const RATE_MIN_DROP = 2; // %
 
 /** The site's battery capacity, kWh; 0 — not set. */
 export const batteryCapacity = (env, site) => Number(env.CFG?.settings?.[`cap@${site.id}`]) || 0;
+
+/** User-confirmed inverter shutdown SOC; null means unknown, not a guessed reserve. */
+export function batteryCutoff(env, site) {
+  const raw = env.CFG?.settings?.[`cutoff@${site.id}`];
+  if (raw === null || raw === undefined || String(raw).trim() === '') return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 && value <= 100 ? value : null;
+}
+
+export function parseCutoff(text) {
+  const value = String(text).trim().replace(',', '.');
+  if (!/^\d+(?:\.\d+)?\s*%?$/.test(value)) return null;
+  const n = Number(value.replace('%', '').trim());
+  return Number.isFinite(n) && n >= 0 && n <= 100 ? n : null;
+}
 
 /** Parses a typed capacity: "10,24", "10.24 кВт·год", "0" (clears). @returns {number|null} */
 export function parseCapacity(text) {
@@ -81,6 +96,10 @@ async function outageReadings(env, site, d, gridSince) {
  */
 export async function batteryRuntime(env, site, d, gridSince) {
   if (!Number.isFinite(d?.soc)) return { sec: null, why: 'немає даних про заряд батареї' };
+  const cutoff = batteryCutoff(env, site);
+  const usableSoc = Math.max(0, d.soc - (cutoff ?? 0));
+  const limit = cutoff === null ? 'до 0%; поріг відключення не вказано' : `до порогу ${cutoff}%`;
+  if (usableSoc === 0) return { sec: 0, how: limit, limit };
   const { cur, past } = await outageReadings(env, site, d, gridSince);
   const curSpan = cur.length ? cur.at(-1).ts - cur[0].ts : 0;
   const recent = cur.filter((r) => r.ts >= d.ts - CUR_WINDOW_SEC);
@@ -102,27 +121,30 @@ export async function batteryRuntime(env, site, d, gridSince) {
 
   const cap = batteryCapacity(env, site);
   if (cap && draw > 0) {
-    const sec = ((cap * 1000 * d.soc) / 100 / draw) * 3600;
+    const sec = ((cap * 1000 * usableSoc) / 100 / draw) * 3600;
     return {
       sec,
-      how: `ємність ${cap} кВт·год, заряд ${d.soc}%, ${from} ${Math.round(draw)} Вт`,
+      limit,
+      how: `ємність ${cap} кВт·год, заряд ${d.soc}%, ${from} ${Math.round(draw)} Вт; ${limit}`,
     };
   }
 
   const curRate = fallRate(cur);
   if (curRate.span >= RATE_MIN_SEC && curRate.drop >= RATE_MIN_DROP && curRate.perHour) {
-    const sec = (d.soc / curRate.perHour) * 3600;
+    const sec = (usableSoc / curRate.perHour) * 3600;
     return {
       sec,
-      how: `заряд падає на ${curRate.perHour.toFixed(1)}% за годину в цьому відключенні`,
+      limit,
+      how: `заряд падає на ${curRate.perHour.toFixed(1)}% за годину в цьому відключенні; ${limit}`,
     };
   }
   const pastRate = fallRate(past);
   if (havePast && pastRate.drop >= RATE_MIN_DROP && pastRate.perHour) {
-    const sec = (d.soc / pastRate.perHour) * 3600;
+    const sec = (usableSoc / pastRate.perHour) * 3600;
     return {
       sec,
-      how: `у відключеннях за ${HISTORY_DAYS} днів заряд падав у середньому на ${pastRate.perHour.toFixed(1)}% за годину`,
+      limit,
+      how: `у відключеннях за ${HISTORY_DAYS} днів заряд падав у середньому на ${pastRate.perHour.toFixed(1)}% за годину; ${limit}`,
     };
   }
   return {
@@ -135,6 +157,7 @@ export async function batteryRuntime(env, site, d, gridSince) {
 
 /** "~7 год", "~40 хв": one rounded estimate at the average discharge. */
 export function fmtRuntime(sec) {
+  if (sec <= 0) return '0 хв';
   const one = (s) =>
     s < 3600 ? Math.max(1, Math.round(s / 600) * 10) : s < 36000 ? Math.round(s / 1800) / 2 : Math.round(s / 3600);
   const unit = (s) => (s < 3600 ? 'хв' : 'год');

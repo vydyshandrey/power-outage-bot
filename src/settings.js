@@ -8,7 +8,7 @@
 
 import { userCard } from './access.js';
 import { batteryThreshold } from './automation.js';
-import { batteryCapacity, parseCapacity } from './runtime.js';
+import { batteryCapacity, parseCapacity, batteryCutoff, parseCutoff } from './runtime.js';
 import { CATEGORIES, DEVICE_TYPES, devicesOf, sitesOf } from './config.js';
 import { db, kvGet, kvSet, usersBy } from './db.js';
 import { listDevices, missingDeviceSecrets } from './devices.js';
@@ -133,6 +133,10 @@ function siteCard(env, id) {
     { text: `🪫 Батарея: ${thr ? `${thr}%` : 'не попереджати'}`, callback_data: `s:bt:${id}` },
   ]);
   const cap = batteryCapacity(env, s);
+  const cutoff = batteryCutoff(env, s);
+  kb.push([
+    { text: `🔋 Поріг відключення: ${cutoff === null ? 'не вказано' : `${cutoff}%`}`, callback_data: `s:bl:${id}` },
+  ]);
   kb.push([{ text: `🔋 Ємність батареї: ${cap ? `${cap} кВт·год` : 'не вказано'}`, callback_data: `s:bc:${id}` }]);
   kb.push([{ text: '🗑 Видалити', callback_data: `s:sd:${id}` }], back('s:sl'));
   return { text: lines.join(NL), kb };
@@ -394,6 +398,18 @@ export async function onSettingsText(env, msg, user) {
       });
       return true;
     }
+    case 'site_cutoff': {
+      const value = parseCutoff(text);
+      if (value === null) {
+        await send(env, chat, '⚠️ Вкажи відсоток від 0 до 100, наприклад 20. /cancel — скасувати.');
+        return true;
+      }
+      await setSetting(env, `cutoff@${state.id}`, String(value));
+      await clearAwait(env, chat);
+      const card = siteCard(env, state.id);
+      await send(env, chat, card.text, { reply_markup: { inline_keyboard: card.kb } });
+      return true;
+    }
     case 'site_cap': {
       const v = parseCapacity(text);
       if (v === null) {
@@ -586,6 +602,14 @@ export async function onSettingsCallback(env, cq, me, parts, done) {
           back(`s:so:${a}`),
         ],
       });
+    case 'bl':
+      await ask(
+        env,
+        chat,
+        { kind: 'site_cutoff', id: a },
+        'При якому заряді інвертор припиняє живлення від батареї? Вкажи поріг із налаштувань інвертора у %, наприклад 20. Прогноз враховуватиме лише заряд вище цього рівня. Це не поріг попередження чи вимкнення окремого приладу. Бот не змінює налаштування інвертора.'
+      );
+      return done();
     case 'bc':
       await ask(
         env,

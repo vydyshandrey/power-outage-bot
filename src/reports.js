@@ -56,7 +56,12 @@ async function siteLines(env, site) {
       lines.push(`🔌 Світла немає${dur}`);
       lines.push(`🔋 Від інвертора: споживання ${d.load} Вт, батарея ${d.soc}% (${Math.abs(d.batt)} Вт)`);
       const left = await batteryRuntime(env, site, d, since);
-      if (left.sec !== null) lines.push(`⏳ Вистачить на ${fmtRuntime(left.sec)}`);
+      if (left.sec !== null)
+        lines.push(
+          left.sec === 0
+            ? `⏳ Доступний заряд вичерпано (${left.limit}).`
+            : `⏳ Вистачить на ${fmtRuntime(left.sec)} (${left.limit})`
+        );
     }
     lines.push(`🕒 Дані ${inverterName(site)}: ${fmtDur(now() - d.ts)} тому`);
   } catch (e) {
